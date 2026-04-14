@@ -1,0 +1,1 @@
+const router = require('express').Router(); const { authMiddleware } = require('../middleware/auth'); router.use(authMiddleware); router.get('/', (req, res) = mesaj: 'ok' })); router.post('/', (req, res) = mesaj: 'ok' })); module.exports = router; 
