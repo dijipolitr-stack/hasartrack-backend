@@ -1,14 +1,19 @@
 const router = require('express').Router();
 const { query, withTransaction } = require('../db');
 const { authMiddleware, onlyAdmin, notMusteri, dosyaErisim } = require('../middleware/auth');
+const { uuidParam, httpHata, alanDegeri, UUID_RE } = require('../lib/dogrula');
 
 router.use(authMiddleware);
+router.param('dosyaId', uuidParam('dosyaId'));
+router.param('adimId', uuidParam('adimId'));
 
 // ── LİSTE ────────────────────────────────────────────────────
 // GET /api/dosyalar
 router.get('/', async (req, res, next) => {
   try {
-    const { durum, servis_id, arama, sayfa = 1, limit = 20 } = req.query;
+    const { durum, servis_id, arama } = req.query;
+    const sayfa = Math.max(parseInt(req.query.sayfa, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
     const offset = (sayfa - 1) * limit;
     const params = [];
     const where = ['1=1'];
@@ -36,7 +41,7 @@ router.get('/', async (req, res, next) => {
              a.plaka, a.marka, a.model, a.yil,
              sa.ad_soyad as sahip_ad, sa.telefon as sahip_tel,
              si.sirket_ad as sigorta, si.hasar_no,
-             srv.ad as servis_ad,
+             d.atanan_servis, srv.ad as servis_ad,
              COALESCE(oa.aktif_adim, '') as aktif_adim,
              COALESCE(oa.ilerleme, 0) as ilerleme,
              io.durum as onay_durumu
@@ -189,37 +194,99 @@ router.post('/', onlyAdmin, async (req, res, next) => {
 });
 
 // ── DOSYA GÜNCELLE ────────────────────────────────────────────
-// PATCH /api/dosyalar/:dosyaId
+// PATCH /api/dosyalar/:dosyaId  { alt_tablo?, alan, deger }
+// Tablo ve kolon yalnız bu haritadan alınır; istemci metni SQL'e yazılmaz.
+const M = { t: 'metin' };
+const SAYI = { t: 'sayi' };
+const TARIH = { t: 'tarih' };
+const ALANLAR = {
+  dosyalar: {
+    durum: { t: 'enum', secenekler: ['Aktif', 'Tamamlandı', 'İptal', 'Askıda'], bos: false },
+    oncelik: { t: 'enum', secenekler: ['Normal', 'Yüksek', 'Acil'], bos: false },
+    sigorta_bransi: M, muallak_hasar: SAYI, atama_notu: M,
+  },
+  arac: {
+    plaka: M, marka: M, model: M, yil: { t: 'tamsayi', min: 1900, max: 2100 }, renk: M,
+    sase_no: M, motor_no: M, ruhsat_seri: M, kaza_tarihi: TARIH, kaza_aciklama: M,
+  },
+  sahip: {
+    ad_soyad: M, tc_vergi: M, telefon: { t: 'metin', bos: false }, email: M, adres: M,
+  },
+  sigorta: {
+    sirket_ad: M, hasar_no: M, temsilci_ad: M, temsilci_tel: M, temsilci_mail: M,
+    police_no: M, teminat_turu: M, muafiyet: SAYI,
+  },
+  eksper: {
+    ad_soyad: M, firma: M, lisans_no: M, telefon: M, email: M,
+    inceleme_tarihi: TARIH, tahmini_hasar: SAYI, onay_durumu: M,
+  },
+  onarim_merkezi: {
+    ad: M, yetkili_kisi: M, telefon: M, email: M, adres: M,
+    arac_giris_trh: TARIH, tahmini_teslimat: TARIH,
+  },
+  // onaylanan_tutar yazılamaz: yalnız admin-karar belirler
+  muhasebe: {
+    servis_fatura_no: M, servis_fatura_trh: TARIH, servis_fatura_tutar: SAYI,
+    sigorta_odeme_tutar: SAYI, sigorta_odeme_trh: TARIH, notlar: M,
+  },
+};
+const own = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
+
 router.patch('/:dosyaId', onlyAdmin, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId } = req.params;
-    const { alan, deger, alt_tablo } = req.body;
-    // Güvenlik: sadece izin verilen tablolara yazılır
-    const izinliTablolar = { arac: 'arac', sahip: 'sahip', sigorta: 'sigorta',
-      eksper: 'eksper', onarim_merkezi: 'onarim_merkezi', muhasebe: 'muhasebe' };
-    const tablo = izinliTablolar[alt_tablo] || 'dosyalar';
+    const { alan, deger } = req.body || {};
+    const altTablo = req.body?.alt_tablo;
+    const tablo = (altTablo === undefined || altTablo === null || altTablo === '') ? 'dosyalar' : altTablo;
+    if (!own(ALANLAR, tablo)) return res.status(400).json({ error: 'Geçersiz tablo' });
+    if (!own(ALANLAR[tablo], alan)) return res.status(400).json({ error: 'Geçersiz alan' });
 
-    await query(`UPDATE ${tablo} SET ${alan}=$1, updated_at=NOW() WHERE dosya_id=$2`, [deger, dosyaId]);
-    res.json({ mesaj: 'Güncellendi' });
+    const v = alanDegeri(ALANLAR[tablo][alan], deger, alan);
+    let rows;
+    if (tablo === 'dosyalar') {
+      ({ rows } = await query(
+        `UPDATE dosyalar SET "${alan}"=$1, updated_at=NOW() WHERE id=$2 RETURNING *`, [v, dosyaId]));
+    } else if (tablo === 'sahip') {
+      // Satır POST'ta hep oluşur; yoksa 404
+      ({ rows } = await query(
+        `UPDATE sahip SET "${alan}"=$1, updated_at=NOW() WHERE dosya_id=$2 RETURNING *`, [v, dosyaId]));
+    } else {
+      ({ rows } = await query(
+        `INSERT INTO ${tablo} (dosya_id, "${alan}") VALUES ($2, $1)
+         ON CONFLICT (dosya_id) DO UPDATE SET "${alan}"=EXCLUDED."${alan}", updated_at=NOW()
+         RETURNING *`, [v, dosyaId]));
+    }
+    if (!rows.length) return res.status(404).json({ error: 'Kayıt bulunamadı' });
+    res.json(rows[0]);
   } catch (err) { next(err); }
 });
 
 // ── SERVİS ATA ────────────────────────────────────────────────
 // POST /api/dosyalar/:dosyaId/servis-ata
-router.post('/:dosyaId/servis-ata', onlyAdmin, async (req, res, next) => {
+router.post('/:dosyaId/servis-ata', onlyAdmin, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId } = req.params;
-    const { servis_id, not_metni } = req.body;
-    await query(
-      'UPDATE dosyalar SET atanan_servis=$1, atama_notu=$2, updated_at=NOW() WHERE id=$3',
-      [servis_id, not_metni, dosyaId]
-    );
-    await query(
-      `INSERT INTO audit_log (dosya_id, kullanici_id, eylem, detay)
-       VALUES ($1,$2,'SERVIS_ATA',$3)`,
-      [dosyaId, req.user.id, JSON.stringify({ servis_id })]
-    );
-    res.json({ mesaj: 'Servis atandı' });
+    const { servis_id, not_metni } = req.body || {};
+    if (typeof servis_id !== 'string' || !UUID_RE.test(servis_id))
+      return res.status(400).json({ error: 'Geçersiz servis kimliği' });
+
+    const servis = await withTransaction(async (client) => {
+      const { rows: [srv] } = await client.query('SELECT id, ad, aktif FROM servisler WHERE id=$1', [servis_id]);
+      if (!srv) throw httpHata(404, 'Servis bulunamadı');
+      if (!srv.aktif) throw httpHata(409, 'Servis pasif');
+      const { rowCount } = await client.query(
+        'UPDATE dosyalar SET atanan_servis=$1, atama_notu=$2, updated_at=NOW() WHERE id=$3',
+        [servis_id, not_metni ?? null, dosyaId]
+      );
+      if (!rowCount) throw httpHata(404, 'Dosya bulunamadı');
+      await client.query(
+        `INSERT INTO audit_log (dosya_id, kullanici_id, eylem, detay)
+         VALUES ($1,$2,'SERVIS_ATA',$3)`,
+        [dosyaId, req.user.id, JSON.stringify({ servis_id })]
+      );
+      return srv;
+    });
+    res.json({ mesaj: 'Servis atandı', atanan_servis: servis.id, servis_ad: servis.ad });
   } catch (err) { next(err); }
 });
 
@@ -228,12 +295,17 @@ router.post('/:dosyaId/servis-ata', onlyAdmin, async (req, res, next) => {
 router.post('/:dosyaId/adim/:adimId/tamamla', dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId, adimId } = req.params;
-    await withTransaction(async (client) => {
-      // Adımı tamamla
+    const sonuc = await withTransaction(async (client) => {
       const { rows: [adim] } = await client.query(
-        `UPDATE onarim_adimlari SET durum='tamamlandi', tamamlanma_trh=NOW(),
-         tamamlayan_id=$1 WHERE id=$2 AND dosya_id=$3 RETURNING sira, ad, oto_sms`,
-        [req.user.id, adimId, dosyaId]
+        'SELECT id, sira, ad, durum, oto_sms FROM onarim_adimlari WHERE id=$1 AND dosya_id=$2 FOR UPDATE',
+        [adimId, dosyaId]
+      );
+      if (!adim) throw httpHata(404, 'Adım bulunamadı');
+      if (adim.durum === 'tamamlandi') throw httpHata(409, 'Adım zaten tamamlandı');
+
+      await client.query(
+        `UPDATE onarim_adimlari SET durum='tamamlandi', tamamlanma_trh=NOW(), tamamlayan_id=$1 WHERE id=$2`,
+        [req.user.id, adimId]
       );
       // Sonraki adımı aktif yap
       await client.query(
@@ -253,8 +325,12 @@ router.post('/:dosyaId/adim/:adimId/tamamla', dosyaErisim, async (req, res, next
           );
         }
       }
+      const { rows: adimlar } = await client.query(
+        'SELECT * FROM onarim_adimlari WHERE dosya_id=$1 ORDER BY sira', [dosyaId]);
+      const bitti = adimlar.filter((a) => a.durum === 'tamamlandi').length;
+      return { onarim_adimlari: adimlar, ilerleme: adimlar.length ? Math.round((bitti / adimlar.length) * 100) : 0 };
     });
-    res.json({ mesaj: 'Adım tamamlandı' });
+    res.json({ mesaj: 'Adım tamamlandı', ...sonuc });
   } catch (err) { next(err); }
 });
 

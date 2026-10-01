@@ -2,7 +2,16 @@ const router  = require('express').Router();
 const bcrypt  = require('bcrypt');
 const jwt     = require('jsonwebtoken');
 const { query } = require('../db');
+const rateLimit = require('express-rate-limit');
 const { authMiddleware } = require('../middleware/auth');
+const { UUID_RE } = require('../lib/dogrula');
+
+// Servis girişi brute-force koruması: IP başına 15 dk'da 20 deneme
+const servisLoginLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Çok fazla giriş denemesi. 15 dakika bekleyin.' },
+});
 
 const makeToken = (user) =>
   jwt.sign(
@@ -51,14 +60,24 @@ router.post('/login', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/auth/servis-login  (servis adı + şifre)
-router.post('/servis-login', async (req, res, next) => {
+// GET /api/auth/servis-listesi  (anonim; yalnız id ve ad, yalnız aktifler)
+router.get('/servis-listesi', async (req, res, next) => {
   try {
-    const { servis_id, sifre } = req.body;
+    const { rows } = await query('SELECT id, ad FROM servisler WHERE aktif=TRUE ORDER BY ad');
+    res.json({ servisler: rows });
+  } catch (err) { next(err); }
+});
+
+// POST /api/auth/servis-login  (servis adı + şifre)
+router.post('/servis-login', servisLoginLimit, async (req, res, next) => {
+  try {
+    const { servis_id, sifre } = req.body || {};
+    if (typeof servis_id !== 'string' || !UUID_RE.test(servis_id) || typeof sifre !== 'string' || !sifre)
+      return res.status(400).json({ error: 'Servis ve şifre gerekli' });
     const { rows } = await query(
       `SELECT k.*, s.ad as servis_ad, s.adres as servis_adres, s.telefon as servis_tel
        FROM kullanicilar k JOIN servisler s ON s.id=k.servis_id
-       WHERE k.servis_id=$1 AND k.rol='servis' AND k.aktif=TRUE LIMIT 1`,
+       WHERE k.servis_id=$1 AND k.rol='servis' AND k.aktif=TRUE AND s.aktif=TRUE LIMIT 1`,
       [servis_id]
     );
     if (!rows.length) return res.status(401).json({ error: 'Servis bulunamadı' });

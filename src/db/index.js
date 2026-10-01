@@ -1,4 +1,7 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// DATE (1082) string kalır: saat dilimi kayması olmaz
+types.setTypeParser(1082, (v) => v);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

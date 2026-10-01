@@ -2,7 +2,11 @@ const router = require('express').Router();
 const { query, withTransaction } = require('../db');
 const { authMiddleware, onlyAdmin, dosyaErisim } = require('../middleware/auth');
 
+const { uuidParam } = require('../lib/dogrula');
+
 router.use(authMiddleware);
+router.param('dosyaId', uuidParam('dosyaId'));
+router.param('kalemId', uuidParam('kalemId'));
 
 // GET /api/islemler/:dosyaId — kalemler + onay durumu
 router.get('/:dosyaId', dosyaErisim, async (req, res, next) => {
@@ -131,7 +135,7 @@ router.post('/:dosyaId/onaya-gonder', dosyaErisim, async (req, res, next) => {
 });
 
 // POST /api/islemler/:dosyaId/admin-karar — admin onaylar/reddeder
-router.post('/:dosyaId/admin-karar', onlyAdmin, async (req, res, next) => {
+router.post('/:dosyaId/admin-karar', onlyAdmin, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId } = req.params;
     const { karar, not_metni } = req.body; // karar: 'onaylandi' | 'reddedildi'

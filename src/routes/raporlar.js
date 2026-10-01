@@ -20,7 +20,7 @@ router.get('/ozet', async (req, res, next) => {
       SELECT COUNT(*) as sayi FROM islem_onay WHERE durum='bekliyor'`);
 
     const { rows: servis_ozet } = await query(`
-      SELECT srv.ad, COUNT(d.id) as dosya_sayisi,
+      SELECT srv.id, srv.ad, COUNT(d.id) as dosya_sayisi,
              SUM(d.muallak_hasar) as toplam_muallak,
              COUNT(io.id) FILTER (WHERE io.durum='bekliyor') as bekleyen_onay
       FROM servisler srv

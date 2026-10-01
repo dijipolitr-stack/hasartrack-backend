@@ -38,26 +38,28 @@ const notMusteri  = requireRole('admin', 'servis', 'acente');
 // ── DOSYA SAHİPLİĞİ KONTROLÜ ────────────────────────────────
 // Servis yalnızca kendine atanmış dosyaları görebilir
 const dosyaErisim = async (req, res, next) => {
-  const { dosyaId } = req.params;
-  const user = req.user;
-  if (user.rol === 'admin' || user.rol === 'acente') return next();
-  if (user.rol === 'servis') {
-    const { rows } = await query(
-      'SELECT id FROM dosyalar WHERE id=$1 AND atanan_servis=$2',
-      [dosyaId, user.servis_id]
-    );
-    if (!rows.length) return res.status(403).json({ error: 'Bu dosyaya erişiminiz yok' });
-    return next();
-  }
-  if (user.rol === 'musteri') {
-    const { rows } = await query(
-      'SELECT d.id FROM dosyalar d JOIN sahip s ON s.dosya_id=d.id WHERE d.id=$1 AND s.tc_vergi=$2',
-      [dosyaId, user.tc_no]
-    );
-    if (!rows.length) return res.status(403).json({ error: 'Bu dosyaya erişiminiz yok' });
-    return next();
-  }
-  return res.status(403).json({ error: 'Yetkisiz' });
+  try {
+    const { dosyaId } = req.params;
+    const user = req.user;
+    // Önce dosya var mı (yoksa 404), sonra rol kuralı
+    const { rows: [dosya] } = await query('SELECT id, atanan_servis FROM dosyalar WHERE id=$1', [dosyaId]);
+    if (!dosya) return res.status(404).json({ error: 'Dosya bulunamadı' });
+    if (user.rol === 'admin' || user.rol === 'acente') return next();
+    if (user.rol === 'servis') {
+      if (!user.servis_id || dosya.atanan_servis !== user.servis_id)
+        return res.status(403).json({ error: 'Bu dosyaya erişiminiz yok' });
+      return next();
+    }
+    if (user.rol === 'musteri') {
+      const { rows } = await query(
+        'SELECT d.id FROM dosyalar d JOIN sahip s ON s.dosya_id=d.id WHERE d.id=$1 AND s.tc_vergi=$2',
+        [dosyaId, user.tc_no]
+      );
+      if (!rows.length) return res.status(403).json({ error: 'Bu dosyaya erişiminiz yok' });
+      return next();
+    }
+    return res.status(403).json({ error: 'Yetkisiz' });
+  } catch (err) { next(err); }
 };
 
 module.exports = { authMiddleware, requireRole, onlyAdmin, adminOrServis, notMusteri, dosyaErisim };
