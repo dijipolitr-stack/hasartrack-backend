@@ -290,7 +290,4 @@ INSERT INTO servisler (id, ad, adres, telefon) VALUES
   ('11111111-0000-0000-0000-000000000002', 'Yetkili Oto Servis – Üsküdar', 'Bağlarbaşı Mah. No:12, Üsküdar', '0216 320 11 00'),
   ('11111111-0000-0000-0000-000000000003', 'Pro Kaporta & Boya – Maltepe', 'Cevizli Mah. No:88, Maltepe', '0216 455 77 88');
 
--- Admin kullanıcı (şifre: admin123)
-INSERT INTO kullanicilar (ad_soyad, email, sifre_hash, rol) VALUES
-  ('Hasar Admin', 'admin@hasartrack.com',
-   '$2b$12$placeholder_hash_replace_with_real', 'admin');
+-- Admin kullanıcı schema'da yok; `npm run db:seed` (src/db/seed.js) ile oluşur.

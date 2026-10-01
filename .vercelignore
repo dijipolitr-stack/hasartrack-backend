@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+test/
+docs/
+*.md
+schema.sql
+docker-compose.yml
+.git/
+node_modules/
+.vercel/
+uploads/

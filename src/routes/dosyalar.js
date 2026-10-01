@@ -62,8 +62,9 @@ router.get('/', async (req, res, next) => {
     // Toplam sayı
     const countSql = `
       SELECT COUNT(*) FROM dosyalar d
-      LEFT JOIN sahip s ON s.dosya_id = d.id
-      WHERE ${where.slice(0, -2).join(' AND ')}`;
+      LEFT JOIN arac a ON a.dosya_id = d.id
+      LEFT JOIN sahip sa ON sa.dosya_id = d.id
+      WHERE ${where.join(' AND ')}`;
     const { rows: countRows } = await query(countSql, params.slice(0, -2));
 
     res.json({ dosyalar: rows, toplam: parseInt(countRows[0].count), sayfa, limit });
