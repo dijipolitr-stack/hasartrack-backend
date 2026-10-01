@@ -61,14 +61,14 @@ router.post('/', async (req, res, next) => {
       await client.query(
         `INSERT INTO kullanicilar (ad_soyad, email, sifre_hash, rol, servis_id)
          VALUES ($1,$2,$3,'servis',$4)`,
-        [ad, kullaniciEmail, hash, s.id]);
+        [ad.slice(0, 100), kullaniciEmail, hash, s.id]);
       return s;
     });
     res.status(201).json({ ...servis, kullanici_email: kullaniciEmail });
   } catch (err) { next(err); }
 });
 
-// PATCH /api/servisler/:id — ad, adres, telefon, email, aktif, opsiyonel sifre
+// PATCH /api/servisler/:id — ad, adres, telefon, email, aktif, opsiyonel sifre (+ hesap yoksa kullanici_email)
 router.patch('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -87,6 +87,13 @@ router.patch('/:id', async (req, res, next) => {
     }
     let hash = null;
     if ('sifre' in b) { sifreKontrol(b.sifre); hash = await bcrypt.hash(b.sifre, 12); }
+    // Giriş hesabı olmayan servise şifre verilirken hesap açılır; e-posta o zaman zorunlu
+    let kullaniciEmail = null;
+    if ('kullanici_email' in b) {
+      if (!hash) throw httpHata(400, 'Kullanıcı e-postası şifreyle birlikte gönderilmeli');
+      kullaniciEmail = metin(b.kullanici_email, 'Kullanıcı e-postası', 150, true).toLowerCase();
+      if (!EMAIL_RE.test(kullaniciEmail)) throw httpHata(400, 'Kullanıcı e-postası geçersiz');
+    }
     if (!set.length && !hash) throw httpHata(400, 'Güncellenecek alan yok');
 
     const servis = await withTransaction(async (client) => {
@@ -104,8 +111,21 @@ router.patch('/:id', async (req, res, next) => {
       // Pasif servisin kullanıcısı da kapanır (eski token authMiddleware'de düşer)
       if ('aktif' in b)
         await client.query("UPDATE kullanicilar SET aktif=$1 WHERE servis_id=$2 AND rol='servis'", [b.aktif, id]);
-      if (hash)
-        await client.query("UPDATE kullanicilar SET sifre_hash=$1 WHERE servis_id=$2 AND rol='servis'", [hash, id]);
+      if (hash) {
+        const { rowCount } = await client.query(
+          "UPDATE kullanicilar SET sifre_hash=$1 WHERE servis_id=$2 AND rol='servis'", [hash, id]);
+        if (!rowCount) {
+          if (!kullaniciEmail)
+            throw httpHata(400, 'Bu servisin giriş hesabı yok, kullanıcı e-postası gerekli');
+          const { rows: mevcut } = await client.query('SELECT 1 FROM kullanicilar WHERE email=$1', [kullaniciEmail]);
+          if (mevcut.length) throw httpHata(409, 'Bu e-posta zaten kayıtlı');
+          await client.query(
+            `INSERT INTO kullanicilar (ad_soyad, email, sifre_hash, rol, servis_id, aktif)
+             VALUES ($1,$2,$3,'servis',$4,$5)`,
+            [s.ad.slice(0, 100), kullaniciEmail, hash, id, s.aktif]);
+          s.kullanici_email = kullaniciEmail;
+        }
+      }
       return s;
     });
     res.json(servis);

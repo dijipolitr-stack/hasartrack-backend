@@ -297,3 +297,24 @@ test('raporlar/ozet: servis satırlarında id var', async () => {
   assert.equal(r.status, 200);
   assert.ok(r.body.servisler.every((s) => typeof s.id === 'string'));
 });
+
+test('hesapsız servise şifre: e-posta yoksa 400, varsa hesap açılır ve giriş 200; uzun ad 201', async () => {
+  const ornek = '11111111-0000-0000-0000-000000000002'; // schema.sql örnek servisi, giriş hesabı yok
+  let r = await api('PATCH', `/api/servisler/${ornek}`, S.admin, { sifre: SERVIS_SIFRE });
+  assert.equal(r.status, 400);
+  r = await api('PATCH', `/api/servisler/${ornek}`, S.admin, { kullanici_email: `x-${RUN}@test.local` });
+  assert.equal(r.status, 400);
+  r = await api('PATCH', `/api/servisler/${ornek}`, S.admin, { sifre: SERVIS_SIFRE, kullanici_email: ADMIN_EMAIL });
+  assert.equal(r.status, 409);
+  r = await api('PATCH', `/api/servisler/${ornek}`, S.admin, { sifre: SERVIS_SIFRE, kullanici_email: `ornek-${RUN}@test.local` });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.kullanici_email, `ornek-${RUN}@test.local`);
+  r = await api('POST', '/api/auth/servis-login', null, { servis_id: ornek, sifre: SERVIS_SIFRE });
+  assert.equal(r.status, 200);
+  r = await api('GET', '/api/servisler', S.admin);
+  assert.equal(r.body.servisler.find((s) => s.id === ornek).kullanici_email, `ornek-${RUN}@test.local`);
+
+  r = await api('POST', '/api/servisler', S.admin, {
+    ad: 'U'.repeat(150), kullanici_email: `uzun-${RUN}@test.local`, sifre: SERVIS_SIFRE });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+});
