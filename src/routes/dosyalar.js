@@ -43,6 +43,7 @@ router.get('/', async (req, res, next) => {
              sa.ad_soyad as sahip_ad, sa.telefon as sahip_tel,
              si.sirket_ad as sigorta, si.hasar_no,
              d.atanan_servis, srv.ad as servis_ad,
+             om.arac_giris_trh, om.tahmini_teslimat,
              COALESCE(oa.aktif_adim, '') as aktif_adim,
              COALESCE(oa.ilerleme, 0) as ilerleme,
              -- Bekleyen bir onay turu (ek hasar dahil) varsa "bekliyor", yoksa ana iş emrinin durumu
@@ -54,6 +55,7 @@ router.get('/', async (req, res, next) => {
       LEFT JOIN sahip sa ON sa.dosya_id = d.id
       LEFT JOIN sigorta si ON si.dosya_id = d.id
       LEFT JOIN servisler srv ON srv.id = d.atanan_servis
+      LEFT JOIN onarim_merkezi om ON om.dosya_id = d.id
       LEFT JOIN (
         SELECT dosya_id,
           (SELECT ad FROM onarim_adimlari WHERE dosya_id=oa2.dosya_id AND durum='aktif' ORDER BY sira LIMIT 1) as aktif_adim,
