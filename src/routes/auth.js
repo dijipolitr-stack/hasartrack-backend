@@ -95,51 +95,12 @@ router.post('/servis-login', servisLoginLimit, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/auth/musteri-sms  (TC ile SMS kodu gönder)
-router.post('/musteri-sms', async (req, res, next) => {
-  try {
-    const { tc_no } = req.body;
-    const { rows } = await query(
-      `SELECT k.id, s.telefon FROM kullanicilar k
-       JOIN sahip s ON s.tc_vergi=k.tc_no
-       WHERE k.tc_no=$1 AND k.rol='musteri' AND k.aktif=TRUE LIMIT 1`,
-      [tc_no]
-    );
-    if (!rows.length) return res.status(404).json({ error: 'TC numarasına kayıt bulunamadı' });
-
-    // Gerçek SMS API buraya entegre edilir (Netgsm, İletimerkezi vb.)
-    // Demo: kod her zaman 1234
-    const kod = Math.floor(1000 + Math.random() * 9000).toString();
-    // await smsService.send(rows[0].telefon, `HasarTrack giriş kodu: ${kod}`);
-
-    // Kodu geçici olarak DB'de sakla (5 dk geçerli)
-    await query(
-      `INSERT INTO sms_log (alici_tel, mesaj, adim_adi, durum)
-       VALUES ($1, $2, 'GIRIS_KODU', 'bekliyor')`,
-      [rows[0].telefon, `GIRIS:${tc_no}:${kod}`]
-    );
-
-    res.json({ mesaj: 'SMS gönderildi', telefon_masked: rows[0].telefon.replace(/(\d{4})\d+(\d{2})/, '$1***$2') });
-  } catch (err) { next(err); }
-});
-
-// POST /api/auth/musteri-dogrula
-router.post('/musteri-dogrula', async (req, res, next) => {
-  try {
-    const { tc_no, kod } = req.body;
-    // Demo ortamda her kod geçerli
-    // Gerçekte: DB'den son kaydı al, kodu karşılaştır, 5 dk kontrolü yap
-
-    const { rows } = await query(
-      `SELECT k.* FROM kullanicilar k WHERE k.tc_no=$1 AND k.rol='musteri' AND k.aktif=TRUE`,
-      [tc_no]
-    );
-    if (!rows.length) return res.status(401).json({ error: 'Doğrulama başarısız' });
-    const user = rows[0];
-    await query('UPDATE kullanicilar SET son_giris=NOW() WHERE id=$1', [user.id]);
-    res.json({ token: makeToken(user), kullanici: { id: user.id, rol: 'musteri', tc_no: user.tc_no } });
-  } catch (err) { next(err); }
-});
+// Müşteri girişi (TC + SMS kodu) kapalı: SMS sağlayıcısı yok ve kod doğrulanmıyordu.
+// Müşteri, servisin gönderdiği takip linkiyle durumu görür (routes/takip.js).
+const musteriGirisKapali = (req, res) =>
+  res.status(410).json({ error: 'Müşteri girişi kapalı. Servisinizin gönderdiği takip linkini kullanın.' });
+router.post('/musteri-sms', musteriGirisKapali);
+router.post('/musteri-dogrula', musteriGirisKapali);
 
 // GET /api/auth/me
 router.get('/me', authMiddleware, (req, res) => {

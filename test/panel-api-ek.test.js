@@ -78,10 +78,12 @@ test('K18 ön yüz: apiCall hata/401 davranışı ve demo veriye düşmeme', () 
   }
 });
 
-test('K17 regresyon: acente/müşteri panelleri demo veriyle kalır, MuhasebeGorunum api prop isteğe bağlı', () => {
+test('K17 regresyon: acente paneli demo veriyle kalır, müşteri demo girişi yok, MuhasebeGorunum api prop isteğe bağlı', () => {
   assert.ok(/function AcentePanel|function AcenteDetay|rol="acente"/.test(HTML));
   assert.ok(HTML.split('\n').some((l) => l.includes('<MuhasebeGorunum') && l.includes('DEMO_DOSYA.muhasebe') && l.includes('rol="acente"') && !l.includes('api=')), 'acente demo muhasebe');
-  for (const f of ['AcentePanel', 'MusteriPanel']) {
+  // Müşteri demo paneli ve sabit SMS kodu (1234) kaldırıldı; yerine takip linki sayfası (TakipSayfasi)
+  assert.ok(!/function MusteriPanel\(/.test(HTML) && !/kod==="1234"/.test(HTML), 'müşteri demo girişi yok');
+  for (const f of ['AcentePanel']) {
     const i = HTML.indexOf(`function ${f}(`);
     assert.ok(!/apiCall\(/.test(HTML.slice(i, HTML.indexOf('\nfunction ', i + 10))), `${f} API çağırmaz`);
   }
