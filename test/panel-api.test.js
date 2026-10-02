@@ -24,7 +24,7 @@ if (!DB || !JWT || !PASS) throw new Error('TEST_DATABASE_URL, TEST_JWT_SECRET, T
 
 const baseEnv = () => {
   const e = { ...process.env };
-  for (const k of ['DATABASE_URL', 'DATABASE_SSL', 'JWT_SECRET', 'ADMIN_EMAIL', 'ADMIN_PASSWORD', 'FRONTEND_URL', 'NODE_ENV', 'PORT']) delete e[k];
+  for (const k of ['DATABASE_URL', 'DATABASE_SSL', 'JWT_SECRET', 'ADMIN_EMAIL', 'ADMIN_PASSWORD', 'FRONTEND_URL', 'NODE_ENV', 'PORT', 'RATE_LIMIT_MAX']) delete e[k];
   return e;
 };
 const run = (script, extra = {}) =>
@@ -39,7 +39,7 @@ let srv;
 const startServer = async () => {
   srv = spawn(process.execPath, ['src/server.js'], {
     cwd: ROOT,
-    env: { ...baseEnv(), DATABASE_URL: DB, JWT_SECRET: JWT, PORT: String(PORT), FRONTEND_URL: 'http://localhost:3001' },
+    env: { ...baseEnv(), DATABASE_URL: DB, JWT_SECRET: JWT, PORT: String(PORT), FRONTEND_URL: 'http://localhost:3001', RATE_LIMIT_MAX: '5000' },
     stdio: 'ignore',
   });
   for (let i = 0; i < 50; i++) {
@@ -708,4 +708,99 @@ test('mesajlar: admin ↔ servis, okunmamış sayısı, okundu işareti, yetki',
   assert.equal(r.body.mesajlar.length, 2);
   assert.equal((await api('GET', '/api/mesajlar/okunmamis', S.admin)).body.dosyalar[d.id], undefined);
   assert.equal((await api('GET', u, S.tokB)).status, 403);
+});
+
+test('stok: parça, tedarikçi, sipariş, kısmi/tam teslim, araca takma, çıkış sınırı, yetki', async () => {
+  const d = (await yeniDosya()).body;
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/servis-ata`, S.admin, { servis_id: S.srvA })).status, 200);
+  const baska = (await yeniDosya()).body; // servise atanmamış
+
+  // Yetki: admin yazamaz, servis_id'siz okuyamaz; acente/müşteri giremez
+  assert.equal((await api('POST', '/api/stok/parcalar', S.admin, { ad: 'x' })).status, 403);
+  assert.equal((await api('GET', '/api/stok/ozet', S.admin)).status, 400);
+
+  let r = await api('POST', '/api/stok/parcalar', S.tokA, { ad: 'Fren Diski (Ön)', oem_no: '43512', kategori: 'Fren', min_stok: 2 });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const disk = r.body;
+  assert.equal((await api('POST', '/api/stok/parcalar', S.tokA, { ad: '  ' })).status, 400);
+  assert.equal((await api('POST', '/api/stok/parcalar', S.tokA, { ad: 'x', min_stok: -1 })).status, 400);
+  r = await api('POST', '/api/stok/tedarikciler', S.tokA, { ad: 'Oto Parça A.Ş.', telefon: '02125551020', vkn: '1234567890' });
+  assert.equal(r.status, 201);
+  const ted = r.body;
+  assert.equal((await api('POST', '/api/stok/tedarikciler', S.tokA, { ad: 'x', vkn: '12' })).status, 400);
+
+  // B servisi A'nın kayıtlarına dokunamaz
+  assert.equal((await api('PATCH', `/api/stok/parcalar/${disk.id}`, S.tokB, { min_stok: 5 })).status, 404);
+  assert.equal((await api('POST', '/api/stok/siparisler', S.tokB, { tedarikci_id: ted.id, kalemler: [{ parca_id: disk.id, adet: 1 }] })).status, 404);
+
+  // Çıkış: stok yok -> 409
+  assert.equal((await api('POST', '/api/stok/hareketler', S.tokA, { parca_id: disk.id, tip: 'cikis', adet: 1 })).status, 409);
+
+  // Sipariş: araç için, bir mevcut + bir yeni parça
+  assert.equal((await api('POST', '/api/stok/siparisler', S.tokA, { kalemler: [] })).status, 400);
+  assert.equal((await api('POST', '/api/stok/siparisler', S.tokA, { dosya_id: baska.id, kalemler: [{ parca_id: disk.id, adet: 1 }] })).status, 404);
+  r = await api('POST', '/api/stok/siparisler', S.tokA, {
+    tedarikci_id: ted.id, dosya_id: d.id, siparis_no: 'SP-1', tahmini_gelis: '2020-01-01',
+    kalemler: [{ parca_id: disk.id, adet: 4, birim_fiyat: 900 }, { yeni_parca: { ad: 'Sağ Ön Far', kategori: 'Far' }, adet: 1, birim_fiyat: 6200 }],
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const sip = r.body;
+  assert.equal(sip.kalemler.length, 2);
+  assert.equal(sip.toplam, 9800);
+  assert.equal(sip.geciken, true);
+  assert.equal(sip.tedarikci_ad, 'Oto Parça A.Ş.');
+  const kDisk = sip.kalemler.find((k) => k.parca_id === disk.id);
+  const kFar = sip.kalemler.find((k) => k.parca_ad === 'Sağ Ön Far');
+
+  assert.equal((await api('PATCH', `/api/stok/siparisler/${sip.id}`, S.tokA, { durum: 'geldi' })).status, 400);
+  assert.equal((await api('PATCH', `/api/stok/siparisler/${sip.id}`, S.tokA, { durum: 'yolda', tahmini_gelis: '2099-01-01' })).body.durum, 'yolda');
+
+  // Kısmi teslim: 2 disk depoya
+  const teslim = (b) => api('POST', `/api/stok/siparisler/${sip.id}/teslim`, S.tokA, b);
+  assert.equal((await teslim({ kalemler: [{ kalem_id: kDisk.id, adet: 5 }] })).status, 400);
+  r = await teslim({ kalemler: [{ kalem_id: kDisk.id, adet: 2 }] });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.durum, 'kismi');
+  assert.equal((await api('PATCH', `/api/stok/siparisler/${sip.id}`, S.tokA, { durum: 'iptal' })).status, 409);
+  // Kalan: far araca takılarak, 2 disk depoya
+  r = await teslim({ kalemler: [{ kalem_id: kFar.id, adet: 1 }, { kalem_id: kDisk.id, adet: 2 }], araca_tak: true });
+  assert.equal(r.body.durum, 'geldi');
+  assert.ok(r.body.gelis_trh);
+  assert.equal((await teslim({ kalemler: [{ kalem_id: kDisk.id, adet: 1 }] })).status, 409);
+
+  // Depo: disk 4 girdi, 2 araca takıldı (araca_tak ikinci teslimde) -> 2; far 1 girdi 1 takıldı -> 0
+  r = await api('GET', '/api/stok/ozet', S.tokA);
+  assert.equal(r.status, 200);
+  let pd = r.body.parcalar.find((p) => p.id === disk.id);
+  assert.equal(Number(pd.stok), 2);
+  assert.equal(Number(pd.ort_maliyet), 900);
+  assert.equal(pd.kritik, true); // stok 2 <= min 2
+  assert.equal(Number(r.body.parcalar.find((p) => p.ad === 'Sağ Ön Far').stok), 0);
+  assert.equal(r.body.siparisler.find((s) => s.id === sip.id).geciken, false);
+
+  // Elden çıkış (araca), düzeltme, stok sınırı
+  assert.equal((await api('POST', '/api/stok/hareketler', S.tokA, { parca_id: disk.id, tip: 'cikis', adet: 3, dosya_id: d.id })).status, 409);
+  assert.equal((await api('POST', '/api/stok/hareketler', S.tokA, { parca_id: disk.id, tip: 'cikis', adet: 1, dosya_id: baska.id })).status, 404);
+  r = await api('POST', '/api/stok/hareketler', S.tokA, { parca_id: disk.id, tip: 'cikis', adet: 1, dosya_id: d.id, aciklama: 'Ön sol' });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.stok, 1);
+  assert.equal((await api('POST', '/api/stok/hareketler', S.tokA, { parca_id: disk.id, tip: 'duzeltme', adet: -2 })).status, 409);
+  assert.equal((await api('POST', '/api/stok/hareketler', S.tokA, { parca_id: disk.id, tip: 'duzeltme', adet: 0 })).status, 400);
+  assert.equal((await api('POST', '/api/stok/hareketler', S.tokA, { parca_id: disk.id, tip: 'giris', adet: 3, birim_maliyet: 1000 })).body.stok, 4);
+  assert.equal((await api('POST', '/api/stok/hareketler', S.tokA, { parca_id: disk.id, tip: 'transfer', adet: 1 })).status, 400);
+
+  // Dosya görünümü: admin ve servis görür, başka servis göremez
+  r = await api('GET', `/api/stok/dosya/${d.id}`, S.admin);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.siparisler.length, 1);
+  assert.equal(r.body.takilan.length, 3); // far + 2 disk (teslimde) + 1 disk (elden)
+  assert.equal(r.body.takilan.reduce((t, h) => t + Number(h.adet), 0), 4);
+  assert.equal((await api('GET', `/api/stok/dosya/${d.id}`, S.tokB)).status, 403);
+
+  // Admin okur
+  r = await api('GET', `/api/stok/ozet?servis_id=${S.srvA}`, S.admin);
+  assert.equal(r.status, 200);
+  assert.ok(r.body.parcalar.length >= 2 && r.body.hareketler.length >= 5 && r.body.tedarikciler.length >= 1);
+  // Servis B'nin deposu boş, A'nın kayıtları görünmez
+  assert.equal((await api('GET', '/api/stok/ozet', S.tokB)).body.parcalar.filter((p) => p.id === disk.id).length, 0);
 });

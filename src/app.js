@@ -15,6 +15,7 @@ const smsRoutes     = require('./routes/sms');
 const servisRoutes  = require('./routes/servisler');
 const faturaRoutes  = require('./routes/faturalar');
 const isEmriRoutes  = require('./routes/isEmirleri');
+const stokRoutes    = require('./routes/stok');
 const raporRoutes   = require('./routes/raporlar');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
@@ -43,7 +44,7 @@ app.use(cors({
 }));
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,  // 15 dk
-  max: 300,
+  max: Number(process.env.RATE_LIMIT_MAX) || 300, // testlerde yükseltilir
   message: { error: 'Çok fazla istek. 15 dakika bekleyin.' },
 }));
 
@@ -65,6 +66,7 @@ app.use('/api/sms',        smsRoutes);
 app.use('/api/servisler',  servisRoutes);
 app.use('/api/faturalar',  faturaRoutes);
 app.use('/api/is-emirleri', isEmriRoutes);
+app.use('/api/stok',     stokRoutes);
 app.use('/api/raporlar',   raporRoutes);
 
 // ── SAĞLIK KONTROLÜ ─────────────────────────────────────────
