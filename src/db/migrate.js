@@ -14,7 +14,37 @@ async function main() {
   } else {
     await semaUygula();
   }
+  await ekMigrasyonlar();
   await rlsAc();
+}
+
+// backend/migrations/*.sql dosyalarını ad sırasıyla, her birini BİR KEZ uygular (schema_migrations).
+// Dosya ve kaydı aynı transaction'da; yarıda kalan migration kaydedilmez. Dosyalar yine de
+// idempotent yazılır (IF NOT EXISTS / OR REPLACE). Mevcut canlı DB'ye değişiklik eklemenin yolu budur.
+async function ekMigrasyonlar() {
+  const klasor = path.join(__dirname, '..', '..', 'migrations');
+  if (!fs.existsSync(klasor)) return;
+  await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    ad TEXT PRIMARY KEY, uygulama_trh TIMESTAMPTZ DEFAULT NOW())`);
+  const { rows } = await pool.query('SELECT ad FROM schema_migrations');
+  const uygulanan = new Set(rows.map((r) => r.ad));
+  const dosyalar = fs.readdirSync(klasor).filter((f) => f.endsWith('.sql')).sort();
+  for (const f of dosyalar) {
+    if (uygulanan.has(f)) continue;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(fs.readFileSync(path.join(klasor, f), 'utf8'));
+      await client.query('INSERT INTO schema_migrations (ad) VALUES ($1)', [f]);
+      await client.query('COMMIT');
+      console.log(`Migration uygulandı: ${f}`);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw new Error(`${f}: ${err.message}`);
+    } finally {
+      client.release();
+    }
+  }
 }
 
 async function semaUygula() {

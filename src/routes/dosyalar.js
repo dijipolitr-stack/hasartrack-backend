@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { query, withTransaction } = require('../db');
 const { authMiddleware, adminOrServis, onlyAdmin, notMusteri, dosyaErisim } = require('../middleware/auth');
 const { uuidParam, httpHata, alanDegeri, UUID_RE } = require('../lib/dogrula');
+const { BOLUMLER } = require('../lib/isEmri');
 
 router.use(authMiddleware);
 router.param('dosyaId', uuidParam('dosyaId'));
@@ -44,7 +45,10 @@ router.get('/', async (req, res, next) => {
              d.atanan_servis, srv.ad as servis_ad,
              COALESCE(oa.aktif_adim, '') as aktif_adim,
              COALESCE(oa.ilerleme, 0) as ilerleme,
-             io.durum as onay_durumu
+             -- Bekleyen bir onay turu (ek hasar dahil) varsa "bekliyor", yoksa ana iş emrinin durumu
+             CASE WHEN EXISTS (SELECT 1 FROM is_emirleri b WHERE b.dosya_id=d.id
+                               AND b.onay_durumu='bekliyor' AND b.durum<>'iptal')
+                  THEN 'bekliyor' ELSE ana.onay_durumu END as onay_durumu
       FROM dosyalar d
       LEFT JOIN arac a ON a.dosya_id = d.id
       LEFT JOIN sahip sa ON sa.dosya_id = d.id
@@ -56,7 +60,7 @@ router.get('/', async (req, res, next) => {
           ROUND(COUNT(*) FILTER (WHERE durum='tamamlandi')::NUMERIC / NULLIF(COUNT(*),0) * 100) as ilerleme
         FROM onarim_adimlari oa2 GROUP BY dosya_id
       ) oa ON oa.dosya_id = d.id
-      LEFT JOIN islem_onay io ON io.dosya_id = d.id
+      LEFT JOIN is_emirleri ana ON ana.dosya_id = d.id AND ana.no = 1
       WHERE ${where.join(' AND ')}
       ORDER BY d.created_at DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
@@ -176,8 +180,23 @@ router.post('/', onlyAdmin, async (req, res, next) => {
       // Muhasebe kaydı başlat
       await client.query('INSERT INTO muhasebe (dosya_id) VALUES ($1)', [dosya.id]);
 
-      // Onay kaydı başlat
-      await client.query('INSERT INTO islem_onay (dosya_id) VALUES ($1)', [dosya.id]);
+      // Varsayılan evrak kontrol listesi (migrations/005 ile aynı)
+      const evraklar = [
+        ['Kaza Tespit Tutanağı', 'Araç Sahibi'], ['Ehliyet Fotokopisi', 'Araç Sahibi'],
+        ['Ruhsat Fotokopisi', 'Araç Sahibi'], ['Poliçe Kopyası', 'Sigorta Şirketi'],
+        ['Eksper Raporu', 'Eksper'], ['Fotoğraflı Hasar Formu', 'Servis'],
+        ['Maliyet Teklifi (Proforma)', 'Servis'], ['Sigorta Onay Yazısı', 'Sigorta Şirketi'],
+        ['Teslim Tutanağı', 'Servis'],
+      ];
+      for (const [i, [ad, kaynak]] of evraklar.entries()) {
+        await client.query('INSERT INTO evrak (dosya_id, ad, kaynak, sira) VALUES ($1,$2,$3,$4)',
+          [dosya.id, ad, kaynak, i + 1]);
+      }
+
+      // Ana iş emri (onay turu iş emri başınadır)
+      await client.query(
+        `INSERT INTO is_emirleri (dosya_id, no, tur, olusturan_id) VALUES ($1, 1, 'ana', $2)`,
+        [dosya.id, req.user.id]);
 
       // Audit log
       await client.query(
@@ -225,8 +244,8 @@ const ALANLAR = {
     arac_giris_trh: TARIH, tahmini_teslimat: TARIH,
   },
   // onaylanan_tutar yazılamaz: yalnız admin-karar belirler
+  // servis_fatura_* eski alanlar yazılmaz: faturalar servis_faturalari tablosunda (/api/faturalar)
   muhasebe: {
-    servis_fatura_no: M, servis_fatura_trh: TARIH, servis_fatura_tutar: SAYI,
     sigorta_odeme_tutar: SAYI, sigorta_odeme_trh: TARIH, notlar: M,
   },
 };
@@ -302,6 +321,17 @@ router.post('/:dosyaId/adim/:adimId/tamamla', adminOrServis, dosyaErisim, async 
       );
       if (!adim) throw httpHata(404, 'Adım bulunamadı');
       if (adim.durum === 'tamamlandi') throw httpHata(409, 'Adım zaten tamamlandı');
+      // Onarım adımı, usta tarafından bitirildiği bildirilmemiş bölüm görevi varken kapanmaz
+      if (adim.ad === 'Onarım') {
+        const { rows: acik } = await client.query(
+          `SELECT g.bolum, COUNT(*)::int AS sayi FROM bolum_gorevleri g
+           JOIN is_emirleri ie ON ie.id=g.is_emri_id AND ie.durum<>'iptal'
+           WHERE g.dosya_id=$1 AND g.durum<>'tamam' GROUP BY g.bolum`, [dosyaId]);
+        if (acik.length) {
+          const liste = acik.map((r) => `${BOLUMLER[r.bolum]?.ad || r.bolum} (${r.sayi})`).join(', ');
+          throw httpHata(409, `Açık bölüm görevi var: ${liste}. Usta işi bitirdiğini bildirmeden onarım kapanmaz.`);
+        }
+      }
 
       await client.query(
         `UPDATE onarim_adimlari SET durum='tamamlandi', tamamlanma_trh=NOW(), tamamlayan_id=$1 WHERE id=$2`,

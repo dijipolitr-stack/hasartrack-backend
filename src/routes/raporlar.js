@@ -17,15 +17,15 @@ router.get('/ozet', async (req, res, next) => {
       FROM dosyalar`);
 
     const { rows: bekleyen_onay } = await query(`
-      SELECT COUNT(*) as sayi FROM islem_onay WHERE durum='bekliyor'`);
+      SELECT COUNT(*) as sayi FROM is_emirleri WHERE onay_durumu='bekliyor' AND durum<>'iptal'`);
 
     const { rows: servis_ozet } = await query(`
       SELECT srv.id, srv.ad, COUNT(d.id) as dosya_sayisi,
              SUM(d.muallak_hasar) as toplam_muallak,
-             COUNT(io.id) FILTER (WHERE io.durum='bekliyor') as bekleyen_onay
+             COUNT(DISTINCT d.id) FILTER (WHERE EXISTS (SELECT 1 FROM is_emirleri ie
+               WHERE ie.dosya_id=d.id AND ie.onay_durumu='bekliyor' AND ie.durum<>'iptal')) as bekleyen_onay
       FROM servisler srv
       LEFT JOIN dosyalar d ON d.atanan_servis=srv.id AND d.durum='Aktif'
-      LEFT JOIN islem_onay io ON io.dosya_id=d.id
       GROUP BY srv.id, srv.ad ORDER BY dosya_sayisi DESC`);
 
     res.json({
@@ -42,14 +42,16 @@ router.get('/aylik', async (req, res, next) => {
     const { yil = new Date().getFullYear(), ay = new Date().getMonth() + 1 } = req.query;
     const { rows } = await query(`
       SELECT d.dosya_no, a.plaka, sa.ad_soyad, si.sirket_ad,
-             d.muallak_hasar, m.servis_fatura_tutar, m.onaylanan_tutar,
+             d.muallak_hasar, sf.tutar AS servis_fatura_tutar, m.onaylanan_tutar,
              m.sigorta_odeme_tutar, d.durum,
-             (m.sigorta_odeme_tutar - m.servis_fatura_tutar) as net_fark
+             (m.sigorta_odeme_tutar - sf.tutar) as net_fark
       FROM dosyalar d
       LEFT JOIN arac a ON a.dosya_id=d.id
       LEFT JOIN sahip sa ON sa.dosya_id=d.id
       LEFT JOIN sigorta si ON si.dosya_id=d.id
       LEFT JOIN muhasebe m ON m.dosya_id=d.id
+      -- Servis faturaları toplamı (KDV hariç, tüm alıcılar)
+      LEFT JOIN (SELECT dosya_id, SUM(tutar) AS tutar FROM servis_faturalari GROUP BY dosya_id) sf ON sf.dosya_id=d.id
       WHERE EXTRACT(YEAR FROM d.created_at)=$1
         AND EXTRACT(MONTH FROM d.created_at)=$2
       ORDER BY d.created_at DESC`, [yil, ay]);

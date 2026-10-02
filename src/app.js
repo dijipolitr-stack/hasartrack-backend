@@ -13,6 +13,8 @@ const evrakRoutes   = require('./routes/evrak');
 const mesajRoutes   = require('./routes/mesajlar');
 const smsRoutes     = require('./routes/sms');
 const servisRoutes  = require('./routes/servisler');
+const faturaRoutes  = require('./routes/faturalar');
+const isEmriRoutes  = require('./routes/isEmirleri');
 const raporRoutes   = require('./routes/raporlar');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
@@ -51,6 +53,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // ── ROUTES ───────────────────────────────────────────────────
+// Yerel depo için imzalı dosya servisi (canlıda Supabase imzalı URL kullanılır)
+app.get('/api/medya/*', require('./lib/depo').yerelServis);
 app.use('/api/auth',       authRoutes);
 app.use('/api/dosyalar',   dosyaRoutes);
 app.use('/api/islemler',   islemRoutes);
@@ -59,6 +63,8 @@ app.use('/api/evrak',      evrakRoutes);
 app.use('/api/mesajlar',   mesajRoutes);
 app.use('/api/sms',        smsRoutes);
 app.use('/api/servisler',  servisRoutes);
+app.use('/api/faturalar',  faturaRoutes);
+app.use('/api/is-emirleri', isEmriRoutes);
 app.use('/api/raporlar',   raporRoutes);
 
 // ── SAĞLIK KONTROLÜ ─────────────────────────────────────────

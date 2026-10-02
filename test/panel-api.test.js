@@ -238,15 +238,17 @@ test('K8-9 PATCH: bilinmeyen alan/tablo 400, enjeksiyon 400 ve veri sağlam, ups
 
 test('K13 muhasebe: geçersiz sayı 400, sayı ve tarih kaydı aynı döner', async () => {
   const url = `/api/dosyalar/${S.dosyaId}`;
-  assert.equal((await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'servis_fatura_tutar', deger: 'abc' })).status, 400);
-  assert.equal((await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'servis_fatura_tutar', deger: -5 })).status, 400);
-  let r = await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'servis_fatura_tutar', deger: 24800 });
+  // Eski tek servis faturası alanları artık yazılmaz (servis_faturalari tablosu)
+  assert.equal((await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'servis_fatura_tutar', deger: 1 })).status, 400);
+  assert.equal((await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'sigorta_odeme_tutar', deger: 'abc' })).status, 400);
+  assert.equal((await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'sigorta_odeme_tutar', deger: -5 })).status, 400);
+  let r = await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'sigorta_odeme_tutar', deger: 24800 });
   assert.equal(r.status, 200);
-  r = await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'servis_fatura_trh', deger: '2026-01-01' });
+  r = await api('PATCH', url, S.admin, { alt_tablo: 'muhasebe', alan: 'sigorta_odeme_trh', deger: '2026-01-01' });
   assert.equal(r.status, 200);
   const m = (await api('GET', url, S.admin)).body.muhasebe;
-  assert.equal(Number(m.servis_fatura_tutar), 24800);
-  assert.equal(m.servis_fatura_trh, '2026-01-01');
+  assert.equal(Number(m.sigorta_odeme_tutar), 24800);
+  assert.equal(m.sigorta_odeme_trh, '2026-01-01');
 });
 
 test('K10 geçersiz UUID: 400, süreç ayakta', async () => {
@@ -283,6 +285,7 @@ test('K12 işlemler: servis ekler/gönderir, admin onaylar, onaylanan_tutar = to
   assert.equal((await api('POST', url, S.tokA, { aciklama: 'Geç', birim_fiyat: 1 })).status, 409);
   assert.equal((await api('POST', `${url}/admin-karar`, S.tokA, { karar: 'onaylandi' })).status, 403);
   assert.equal((await api('POST', `/api/islemler/${crypto.randomUUID()}/admin-karar`, S.admin, { karar: 'onaylandi' })).status, 404);
+  // Eksper adı verilmedi: dosyanın eksper kaydındaki ad kullanılır (K8-9'da girildi)
   assert.equal((await api('POST', `${url}/admin-karar`, S.admin, { karar: 'onaylandi' })).status, 200);
   const m = (await api('GET', `/api/dosyalar/${S.dosyaId}`, S.admin)).body.muhasebe;
   assert.equal(Number(m.onaylanan_tutar), 2501);
@@ -344,16 +347,327 @@ test('yetki sıkılaştırma: acente yazamaz, servis kalem onaylayamaz, karar ya
   assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.tokA, { durum: 'onaylandi' })).status, 403);
   assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.tokA, { aciklama: 'Yeni' })).status, 200);
   assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.admin, { durum: 'gecersiz' })).status, 400);
-  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.admin, { durum: 'reddedildi' })).status, 200);
+  // Kalem kararı yalnız onay bekleyen iş emrinde
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.admin, { durum: 'reddedildi' })).status, 409);
   assert.equal((await api('POST', `/api/dosyalar/${d.id}/adim/${adim.id}/tamamla`, S.tokA)).status, 200);
 
   // Admin kararı: taslakta 409, bekliyor iken 200
   assert.equal((await api('POST', `/api/islemler/${d.id}/admin-karar`, S.admin, { karar: 'onaylandi' })).status, 409);
+  const k2 = (await api('POST', `/api/islemler/${d.id}`, S.tokA, { kategori: 'Boya', aciklama: 'Reddedilecek', birim_fiyat: 50 })).body;
   assert.equal((await api('POST', `/api/islemler/${d.id}/onaya-gonder`, S.tokA)).status, 200);
-  assert.equal((await api('POST', `/api/islemler/${d.id}/admin-karar`, S.admin, { karar: 'onaylandi' })).status, 200);
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${k2.id}`, S.admin, { durum: 'reddedildi' })).status, 200);
+  assert.equal((await api('POST', `/api/islemler/${d.id}/admin-karar`, S.admin, { karar: 'onaylandi', eksper_ad: 'Test Eksper' })).status, 200);
   assert.equal((await api('POST', `/api/islemler/${d.id}/admin-karar`, S.admin, { karar: 'reddedildi' })).status, 409);
+  // Tek tek reddedilen kalem onaylanan tutara girmez
+  assert.equal(Number((await api('GET', `/api/dosyalar/${d.id}`, S.admin)).body.muhasebe.onaylanan_tutar), 100);
 
   // Kolon sınırını aşan metin 400 (500 değil)
   const r = await api('PATCH', `/api/dosyalar/${d.id}`, S.admin, { alt_tablo: 'arac', alan: 'plaka', deger: 'X'.repeat(500) });
   assert.equal(r.status, 400, JSON.stringify(r.body));
+});
+
+test('faturalar: kalem ödeyeni, pay özeti, çoklu servis faturası, dış hizmet faturası, yetki', async () => {
+  const d = (await yeniDosya()).body;
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/servis-ata`, S.admin, { servis_id: S.srvA })).status, 200);
+  assert.equal((await api('PATCH', `/api/dosyalar/${d.id}`, S.admin, { alt_tablo: 'sigorta', alan: 'muafiyet', deger: 1000 })).status, 200);
+
+  // Kalemler: sigorta 10.000, müşteri 2.000, reddedilen sayılmaz
+  const ik = `/api/islemler/${d.id}`;
+  assert.equal((await api('POST', ik, S.tokA, { aciklama: 'Kapı', birim_fiyat: 10000 })).body.odeyen, 'sigorta');
+  const m = (await api('POST', ik, S.tokA, { aciklama: 'Cam filmi', birim_fiyat: 500, odeyen: 'sigorta' })).body;
+  assert.equal((await api('POST', ik, S.tokA, { aciklama: 'x', birim_fiyat: 1, odeyen: 'kimse' })).status, 400);
+  assert.equal((await api('PATCH', `${ik}/${m.id}`, S.tokA, { odeyen: 'musteri', birim_fiyat: 2000 })).body.odeyen, 'musteri');
+  assert.equal((await api('PATCH', `${ik}/${m.id}`, S.tokA, { odeyen: 'kimse' })).status, 400);
+  assert.equal((await api('POST', `${ik}/toplu`, S.tokA, { kalemler: [{ aciklama: 'y', birim_fiyat: 1, odeyen: 'kimse' }] })).status, 400);
+
+  const u = `/api/faturalar/${d.id}`;
+  let r = await api('GET', u, S.tokA);
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.ozet.pay, { sigorta: 9000, musteri: 3000, acente: 0, diger: 0 });
+  assert.equal(r.body.ozet.muafiyet, 1000);
+  assert.equal((await api('GET', u, S.tokB)).status, 403);
+
+  // Servis faturaları: iki alıcı
+  assert.equal((await api('POST', `${u}/servis`, S.tokA, { alici_tipi: 'sigorta', tutar: 100 })).status, 400); // alici_ad yok
+  assert.equal((await api('POST', `${u}/servis`, S.tokA, { alici_tipi: 'banka', alici_ad: 'X', tutar: 100 })).status, 400);
+  assert.equal((await api('POST', `${u}/servis`, S.tokA, { alici_tipi: 'sigorta', alici_ad: 'X', tutar: 100, kdv_orani: 18 })).status, 400);
+  assert.equal((await api('POST', `${u}/servis`, S.tokA, { alici_tipi: 'sigorta', alici_ad: 'X', tutar: 100, alici_vkn: '12ab' })).status, 400);
+  r = await api('POST', `${u}/servis`, S.tokA, {
+    alici_tipi: 'sigorta', alici_ad: 'Test Sigorta', alici_vkn: '1234567890', fatura_no: 'SF-1', fatura_trh: '2026-09-30', tutar: 9000 });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(Number(r.body.kdv_tutar), 1800);
+  assert.equal(Number(r.body.toplam), 10800);
+  assert.equal(r.body.odeme_durumu, 'bekliyor');
+  const sf = r.body;
+  r = await api('POST', `${u}/servis`, S.admin, { alici_tipi: 'musteri', alici_ad: 'Test Sahip', tutar: 2500, kdv_orani: 10 });
+  assert.equal(r.status, 201);
+  assert.equal(Number(r.body.toplam), 2750);
+
+  r = await api('PATCH', `${u}/servis/${sf.id}`, S.tokA, { odenen_tutar: 5000, odeme_trh: '2026-10-01' });
+  assert.equal(r.body.odeme_durumu, 'kismi');
+  r = await api('PATCH', `${u}/servis/${sf.id}`, S.tokA, { odenen_tutar: 10800 });
+  assert.equal(r.body.odeme_durumu, 'odendi');
+  assert.equal((await api('PATCH', `${u}/servis/${sf.id}`, S.tokA, {})).status, 400);
+  assert.equal((await api('PATCH', `${u}/servis/${sf.id}`, S.tokA, { alici_ad: '  ' })).status, 400);
+  assert.equal((await api('PATCH', `${u}/servis/${sf.id}`, S.tokB, { tutar: 1 })).status, 403);
+  assert.equal((await api('PATCH', `${u}/servis/abc`, S.tokA, { tutar: 1 })).status, 400);
+  assert.equal((await api('PATCH', `${u}/servis/${crypto.randomUUID()}`, S.tokA, { tutar: 1 })).status, 404);
+
+  // Dış hizmet faturası: kaleme bağlanabilir, başka dosyanın kalemine bağlanamaz
+  const baska = (await yeniDosya()).body;
+  const bk = (await api('POST', `/api/islemler/${baska.id}`, S.admin, { aciklama: 'b', birim_fiyat: 1 })).body;
+  assert.equal((await api('POST', `${u}/dis`, S.tokA, { firma: 'Cam Usta', tutar: 100 })).status, 400); // hizmet yok
+  assert.equal((await api('POST', `${u}/dis`, S.tokA, { firma: 'Cam Usta', hizmet: 'Ön cam', tutar: 'abc' })).status, 400);
+  assert.equal((await api('POST', `${u}/dis`, S.tokA, { firma: 'Cam Usta', hizmet: 'Ön cam', tutar: 1, islem_id: bk.id })).status, 400);
+  r = await api('POST', `${u}/dis`, S.tokA, { firma: 'Cam Usta', hizmet: 'Ön cam değişimi', islem_id: m.id, fatura_trh: '2026-09-20', tutar: 4500 });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.fatura_trh, '2026-09-20');
+  assert.equal(r.body.yansitildi, false);
+  assert.equal(Number(r.body.toplam), 5400);
+  const df = r.body;
+  assert.equal((await api('PATCH', `${u}/dis/${df.id}`, S.tokA, { yansitildi: 'evet' })).status, 400);
+  assert.equal((await api('PATCH', `${u}/dis/${df.id}`, S.tokA, { yansitildi: true })).body.yansitildi, true);
+
+  r = await api('GET', u, S.admin);
+  assert.equal(r.body.servis_faturalari.length, 2);
+  assert.equal(r.body.dis_faturalar.length, 1);
+  assert.deepEqual(r.body.ozet.faturalanan, { sigorta: 9000, musteri: 2500, acente: 0, diger: 0 });
+  assert.deepEqual(r.body.ozet.kalan, { sigorta: 0, musteri: 500, acente: 0, diger: 0 });
+  assert.equal(r.body.ozet.dis_toplam, 4500);
+  assert.equal(r.body.ozet.tahsil_edilen, 10800);
+
+  assert.equal((await api('DELETE', `${u}/dis/${df.id}`, S.tokB)).status, 403);
+  assert.equal((await api('DELETE', `${u}/dis/${df.id}`, S.tokA)).status, 200);
+  assert.equal((await api('DELETE', `${u}/dis/${df.id}`, S.tokA)).status, 404);
+  assert.equal((await api('DELETE', `${u}/servis/${sf.id}`, S.tokA)).status, 200);
+
+  // Servis muhasebe PATCH'i yapamaz (fatura artık servis_faturalari'nda)
+  assert.equal((await api('PATCH', `/api/dosyalar/${d.id}`, S.tokA, { alt_tablo: 'muhasebe', alan: 'servis_fatura_no', deger: 'x' })).status, 403);
+});
+
+test('iş emri ve bölüm görevleri: usta bildirimi, onarım adımı açık görevle kapanmaz, pano', async () => {
+  const d = (await yeniDosya()).body;
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/servis-ata`, S.admin, { servis_id: S.srvA })).status, 200);
+  let r = await api('GET', `/api/is-emirleri/${d.id}`, S.tokA);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.is_emirleri.length, 1);
+  const ana = r.body.is_emirleri[0];
+  assert.equal(ana.no, 1);
+  assert.equal(ana.tur, 'ana');
+  assert.equal((await api('GET', `/api/is-emirleri/${d.id}`, S.tokB)).status, 403);
+
+  const g = `/api/is-emirleri/${d.id}/${ana.id}/gorevler`;
+  assert.equal((await api('POST', g, S.tokA, { bolum: 'bahce' })).status, 400);
+  r = await api('POST', g, S.tokA, { bolum: 'boya', aciklama: 'Sağ ön çamurluk boya', sorumlu_usta: 'Mehmet Usta' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.deepEqual(r.body.adimlar.map((a) => a.ad), ['Hazırlık (macun, astar)', 'Boya', 'Pasta-cila']);
+  const boya = r.body;
+  const kap = (await api('POST', g, S.tokA, { bolum: 'kaporta' })).body;
+  assert.equal((await api('POST', g, S.tokB, { bolum: 'kaporta' })).status, 403);
+
+  // Durum: beklemede nedensiz 400, nedenli 200; tamam elle verilemez
+  assert.equal((await api('PATCH', `${g}/${boya.id}`, S.tokA, { durum: 'beklemede' })).status, 400);
+  r = await api('PATCH', `${g}/${boya.id}`, S.tokA, { durum: 'beklemede', bekleme_nedeni: 'Boya kodu bekleniyor' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.bekleme_nedeni, 'Boya kodu bekleniyor');
+  assert.equal((await api('PATCH', `${g}/${boya.id}`, S.tokA, { durum: 'tamam' })).status, 400);
+
+  // Pano: açık görevler, servis yalnız kendi
+  r = await api('GET', '/api/is-emirleri/pano', S.tokA);
+  assert.equal(r.status, 200);
+  const panoBoya = r.body.gorevler.find((x) => x.id === boya.id);
+  assert.ok(panoBoya && panoBoya.aktif_adim === 'Hazırlık (macun, astar)' && panoBoya.durum === 'beklemede');
+  assert.ok(!(await api('GET', '/api/is-emirleri/pano', S.tokB)).body.gorevler.some((x) => x.dosya_id === d.id));
+
+  // Adım tamamlama: usta adı zorunlu, tekrar 409, son adımla görev tamam
+  const adim = (i) => `${g}/${boya.id}/adimlar/${boya.adimlar[i].id}/tamamla`;
+  assert.equal((await api('POST', adim(0), S.tokA, {})).status, 400);
+  r = await api('POST', adim(0), S.tokA, { usta: 'Mehmet Usta' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.durum, 'devam');
+  assert.equal(r.body.bekleme_nedeni, null);
+  assert.equal(r.body.adimlar[0].tamamlayan_usta, 'Mehmet Usta');
+  assert.equal((await api('POST', adim(0), S.tokA, { usta: 'Mehmet Usta' })).status, 409);
+  await api('POST', adim(1), S.tokA, { usta: 'Mehmet Usta' });
+  r = await api('POST', adim(2), S.tokA, { usta: 'Ali Usta' });
+  assert.equal(r.body.durum, 'tamam');
+  assert.equal(r.body.bitiren_usta, 'Ali Usta');
+  assert.equal((await api('PATCH', `${g}/${boya.id}`, S.tokA, { aciklama: 'x' })).status, 409);
+  assert.equal((await api('DELETE', `${g}/${boya.id}`, S.tokA)).status, 409);
+
+  // Onarım adımı: kaporta görevi açıkken kapanmaz
+  const adimlar = (await api('GET', `/api/dosyalar/${d.id}`, S.admin)).body.onarim_adimlari;
+  for (const a of adimlar.filter((x) => x.sira < 6))
+    assert.equal((await api('POST', `/api/dosyalar/${d.id}/adim/${a.id}/tamamla`, S.tokA)).status, 200);
+  const onarim = adimlar.find((x) => x.ad === 'Onarım');
+  r = await api('POST', `/api/dosyalar/${d.id}/adim/${onarim.id}/tamamla`, S.tokA);
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /Kaporta \(1\)/);
+  // Adımı bitmemiş görev silinebilir; sonra onarım kapanır
+  assert.equal((await api('DELETE', `${g}/${kap.id}`, S.tokA)).status, 200);
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/adim/${onarim.id}/tamamla`, S.tokA)).status, 200);
+});
+
+test('ek hasar: ana onaydan önce 409, ayrı onay turu, eksper/müşteri onaylayanı, bekleyen onaylar', async () => {
+  const d = (await yeniDosya()).body;
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/servis-ata`, S.admin, { servis_id: S.srvA })).status, 200);
+  const ik = `/api/islemler/${d.id}`;
+  await api('POST', ik, S.tokA, { aciklama: 'Kapı', birim_fiyat: 1000 });
+  assert.equal((await api('POST', `/api/is-emirleri/${d.id}`, S.tokA, { aciklama: 'Gizli hasar' })).status, 409);
+  assert.equal((await api('POST', `${ik}/onaya-gonder`, S.tokA)).status, 200);
+  assert.equal((await api('POST', `${ik}/admin-karar`, S.admin, { karar: 'onaylandi', eksper_ad: 'Eksper Bey' })).status, 200);
+
+  // Ek hasar iş emri
+  assert.equal((await api('POST', `/api/is-emirleri/${d.id}`, S.tokA, {})).status, 400);
+  let r = await api('POST', `/api/is-emirleri/${d.id}`, S.tokA, { aciklama: 'Söküm sonrası panel hasarı' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.no, 2);
+  assert.equal(r.body.tur, 'ek_hasar');
+  const ek = r.body;
+
+  // Ana iş emrine artık kalem eklenmez; ek hasara eklenir
+  assert.equal((await api('POST', ik, S.tokA, { aciklama: 'x', birim_fiyat: 1 })).status, 409);
+  assert.equal((await api('POST', ik, S.tokA, { aciklama: 'x', birim_fiyat: 1, is_emri_id: crypto.randomUUID() })).status, 404);
+  assert.equal((await api('POST', ik, S.tokA, { aciklama: 'Panel', birim_fiyat: 3000, is_emri_id: ek.id })).status, 201);
+  assert.equal((await api('POST', ik, S.tokA, { aciklama: 'Jant (sigorta harici)', birim_fiyat: 500, odeyen: 'musteri', is_emri_id: ek.id })).status, 201);
+  assert.equal((await api('POST', `${ik}/onaya-gonder`, S.tokA, { is_emri_id: ek.id })).status, 200);
+
+  // Liste: bekleyen tur var -> dosya "bekliyor"
+  r = await api('GET', `/api/dosyalar?arama=${encodeURIComponent(d.dosya_no)}`, S.admin);
+  assert.equal(r.body.dosyalar[0].onay_durumu, 'bekliyor');
+  r = await api('GET', '/api/is-emirleri/bekleyen-onaylar', S.admin);
+  const bo = r.body.onaylar.find((o) => o.id === ek.id);
+  assert.ok(bo && bo.no === 2 && Number(bo.tutar) === 3500 && bo.gun === 0);
+  assert.equal((await api('GET', '/api/is-emirleri/bekleyen-onaylar', S.tokA)).status, 403);
+
+  // Karar: dosyada eksper yok, sahip var -> müşteri adı sahipten gelir, eksper adı zorunlu
+  const karar = (b) => api('POST', `${ik}/admin-karar`, S.admin, { is_emri_id: ek.id, ...b });
+  assert.equal((await karar({ karar: 'onaylandi' })).status, 400);
+  assert.equal((await karar({ karar: 'onaylandi', eksper_ad: 'Eksper Bey' })).status, 200);
+  r = await api('GET', ik, S.admin);
+  const panel = r.body.kalemler.find((k) => k.aciklama === 'Panel');
+  const jant = r.body.kalemler.find((k) => k.aciklama.startsWith('Jant'));
+  assert.equal(panel.onaylayan_tip, 'eksper');
+  assert.equal(panel.onaylayan_ad, 'Eksper Bey');
+  assert.equal(jant.onaylayan_tip, 'musteri');
+  assert.equal(jant.onaylayan_ad, 'Test Sahip');
+  assert.equal(r.body.is_emirleri.find((x) => x.id === ek.id).onay_durumu, 'onaylandi');
+  // Onaylanan tutar tüm turların toplamı
+  r = await api('GET', `/api/dosyalar/${d.id}`, S.admin);
+  assert.equal(Number(r.body.muhasebe.onaylanan_tutar), 4500);
+
+  // İptal: yalnız onaya gitmemiş ek hasar
+  const ek2 = (await api('POST', `/api/is-emirleri/${d.id}`, S.tokA, { aciklama: 'Yanlış bildirim' })).body;
+  assert.equal(ek2.no, 3);
+  assert.equal((await api('PATCH', `/api/is-emirleri/${d.id}/${ek.id}`, S.tokA, { durum: 'iptal' })).status, 409);
+  assert.equal((await api('PATCH', `/api/is-emirleri/${d.id}/${ek2.id}`, S.tokA, { durum: 'iptal' })).status, 200);
+  assert.equal((await api('POST', ik, S.tokA, { aciklama: 'x', birim_fiyat: 1, is_emri_id: ek2.id })).status, 409);
+
+  // Dış fatura ek hasar iş emrine bağlanabilir; verilmezse ana iş emri
+  r = await api('POST', `/api/faturalar/${d.id}/dis`, S.tokA, { firma: 'Jant Ustası', hizmet: 'Jant düzeltme', tutar: 400, is_emri_id: ek.id });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.is_emri_id, ek.id);
+  r = await api('POST', `/api/faturalar/${d.id}/dis`, S.tokA, { firma: 'X', hizmet: 'Y', tutar: 1 });
+  assert.equal(r.body.is_emri_id, (await api('GET', `/api/is-emirleri/${d.id}`, S.tokA)).body.is_emirleri[0].id);
+});
+
+// multipart yükleme (Node 22 FormData + Blob)
+const yukleIstek = async (url, token, { bayt, mime, ad = 'dosya.jpg', alanlar = {} }) => {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(alanlar)) fd.append(k, v);
+  if (bayt) fd.append('dosya', new Blob([bayt], { type: mime }), ad);
+  const res = await fetch(`${BASE}${url}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd });
+  let body = null;
+  try { body = await res.json(); } catch {}
+  return { status: res.status, body };
+};
+
+test('fotoğraflar: yükle, imzalı URL ile görüntüle, tür/boyut sınırı, yetki, düzenle, sil', async () => {
+  const d = (await yeniDosya()).body;
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/servis-ata`, S.admin, { servis_id: S.srvA })).status, 200);
+  const u = `/api/fotograflar/${d.id}`;
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), crypto.randomBytes(2000)]);
+
+  let r = await yukleIstek(u, S.tokA, { bayt: jpeg, mime: 'image/jpeg', ad: 'sağ ön çamurluk.jpg', alanlar: { kategori: 'onarim' } });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.etiket, 'sağ ön çamurluk');
+  assert.equal(r.body.kategori, 'onarim');
+  assert.equal(r.body.boyut_byte, jpeg.length);
+  const foto = r.body;
+
+  // İmzalı URL çalışır, imza bozulunca 403
+  let g = await fetch(foto.url);
+  assert.equal(g.status, 200);
+  assert.ok(Buffer.from(await g.arrayBuffer()).equals(jpeg));
+  assert.equal((await fetch(foto.url.replace(/i=[0-9a-f]+/, 'i=' + '0'.repeat(32)))).status, 403);
+  assert.equal((await fetch(foto.url.replace(/b=\d+/, 'b=1'))).status, 403);
+
+  assert.equal((await yukleIstek(u, S.tokA, { bayt: Buffer.from('x'), mime: 'text/plain', ad: 'a.txt' })).status, 400);
+  assert.equal((await yukleIstek(u, S.tokA, { bayt: Buffer.from('%PDF'), mime: 'application/pdf', ad: 'a.pdf' })).status, 400);
+  assert.equal((await yukleIstek(u, S.tokA, { bayt: Buffer.alloc(4 * 1024 * 1024 + 10), mime: 'image/jpeg' })).status, 413);
+  assert.equal((await yukleIstek(u, S.tokA, {})).status, 400);
+  assert.equal((await yukleIstek(u, S.tokA, { bayt: jpeg, mime: 'image/jpeg', alanlar: { kategori: 'tatil' } })).status, 400);
+  assert.equal((await yukleIstek(u, S.tokB, { bayt: jpeg, mime: 'image/jpeg' })).status, 403);
+
+  r = await api('GET', u, S.admin);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.fotograflar.length, 1);
+  assert.equal(r.body.fotograflar[0].yukleyen_rol, 'servis');
+  assert.ok(r.body.fotograflar[0].url.includes('/api/medya/'));
+  assert.equal((await api('GET', u, S.tokB)).status, 403);
+
+  r = await api('PATCH', `${u}/${foto.id}`, S.tokA, { etiket: 'Sağ ön (boya sonrası)', kategori: 'teslimat' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.kategori, 'teslimat');
+  assert.equal((await api('PATCH', `${u}/${foto.id}`, S.tokA, { kategori: 'x' })).status, 400);
+
+  assert.equal((await api('DELETE', `${u}/${foto.id}`, S.tokB)).status, 403);
+  assert.equal((await api('DELETE', `${u}/${foto.id}`, S.tokA)).status, 200);
+  assert.equal((await api('DELETE', `${u}/${foto.id}`, S.tokA)).status, 404);
+  assert.equal((await fetch(foto.url)).status, 404); // depodan da silindi
+});
+
+test('evrak: varsayılan liste, belge yükle (PDF), durum, ekle/sil yetkisi', async () => {
+  const d = (await yeniDosya()).body;
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/servis-ata`, S.admin, { servis_id: S.srvA })).status, 200);
+  const u = `/api/evrak/${d.id}`;
+  let r = await api('GET', u, S.tokA);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.evrak.length, 9);
+  assert.equal(r.body.evrak[0].ad, 'Kaza Tespit Tutanağı');
+  assert.ok(r.body.evrak.every((e) => e.durum === 'bekliyor' && e.url === null));
+  const proforma = r.body.evrak.find((e) => e.ad.startsWith('Maliyet Teklifi'));
+
+  const pdf = Buffer.from('%PDF-1.4\n% test\n');
+  r = await yukleIstek(`${u}/${proforma.id}/yukle`, S.tokA, { bayt: pdf, mime: 'application/pdf', ad: 'proforma.pdf' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.durum, 'tamam');
+  assert.equal(r.body.dosya_adi, 'proforma.pdf');
+  assert.ok(r.body.teslim_trh);
+  const g = await fetch(r.body.url);
+  assert.equal(g.status, 200);
+  assert.equal(g.headers.get('content-type'), 'application/pdf');
+  assert.equal((await yukleIstek(`${u}/${crypto.randomUUID()}/yukle`, S.tokA, { bayt: pdf, mime: 'application/pdf' })).status, 404);
+  assert.equal((await yukleIstek(`${u}/${proforma.id}/yukle`, S.tokB, { bayt: pdf, mime: 'application/pdf' })).status, 403);
+
+  r = await api('PATCH', `${u}/${proforma.id}`, S.admin, { durum: 'eksik', uyari_not: 'İmzasız' });
+  assert.equal(r.body.durum, 'eksik');
+  assert.equal(r.body.uyari_not, 'İmzasız');
+  assert.equal((await api('PATCH', `${u}/${proforma.id}`, S.admin, { durum: 'kayip' })).status, 400);
+
+  r = await api('POST', u, S.tokA, { ad: 'Çekici Faturası', kaynak: 'Servis' });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.sira, 10);
+  assert.equal((await api('POST', u, S.tokA, { ad: '  ' })).status, 400);
+  assert.equal((await api('DELETE', `${u}/${r.body.id}`, S.tokA)).status, 403);
+  assert.equal((await api('DELETE', `${u}/${r.body.id}`, S.admin)).status, 200);
+});
+
+test('dosya silinince audit_log kaydı kalır, bağ NULL olur (006)', async () => {
+  const d = (await yeniDosya()).body;
+  const once = (await sql('SELECT COUNT(*)::int n FROM audit_log WHERE dosya_id=$1', [d.id])).rows[0].n;
+  assert.ok(once >= 1);
+  await sql('DELETE FROM dosyalar WHERE id=$1', [d.id]);
+  const kalan = (await sql(`SELECT COUNT(*)::int n FROM audit_log WHERE dosya_id IS NULL AND detay->>'dosya_no'=$1`, [d.dosya_no])).rows[0].n;
+  assert.equal(kalan, 1);
 });

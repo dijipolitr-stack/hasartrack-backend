@@ -53,12 +53,12 @@ const login = (sifre, email = EMAIL) =>
 
 test.after(stopServer);
 
-test('A2 migrate: boş DB, 17 tablo, 2. çalışma atlar, RLS açık', async () => {
+test('A2 migrate: boş DB, 17 tablo + migrations, 2. çalışma atlar, RLS açık', async () => {
   let r = run('src/db/migrate.js');
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Şema uygulandı/);
   const t = await sql("SELECT count(*)::int n FROM pg_tables WHERE schemaname='public'");
-  assert.equal(t.rows[0].n, 17);
+  assert.equal(t.rows[0].n, 23); // schema.sql 17 + migrations (5 tablo) + schema_migrations
   r = run('src/db/migrate.js');
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Şema var, atlandı/);
