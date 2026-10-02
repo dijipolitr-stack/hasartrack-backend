@@ -77,6 +77,12 @@ router.patch('/:dosyaId/:fotoId', adminOrServis, dosyaErisim, async (req, res, n
 // DELETE /api/fotograflar/:dosyaId/:fotoId
 router.delete('/:dosyaId/:fotoId', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
+    const { rows: [mevcut] } = await query(
+      'SELECT yukleyen_id FROM fotograflar WHERE id=$1 AND dosya_id=$2', [req.params.fotoId, req.params.dosyaId]);
+    if (!mevcut) return res.status(404).json({ error: 'Fotoğraf bulunamadı' });
+    // Servis yalnız kendi yüklediğini siler; admin'in yüklediği kaza/ekspertiz kanıtı korunur
+    if (req.user.rol === 'servis' && mevcut.yukleyen_id !== req.user.id)
+      return res.status(403).json({ error: 'Yalnız kendi yüklediğiniz fotoğrafı silebilirsiniz' });
     const { rows: [f] } = await query(
       'DELETE FROM fotograflar WHERE id=$1 AND dosya_id=$2 RETURNING url', [req.params.fotoId, req.params.dosyaId]);
     if (!f) return res.status(404).json({ error: 'Fotoğraf bulunamadı' });

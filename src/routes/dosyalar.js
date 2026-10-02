@@ -27,7 +27,7 @@ router.get('/', async (req, res, next) => {
     // Müşteri kendi dosyalarını görür
     if (req.user.rol === 'musteri') {
       params.push(req.user.tc_no);
-      where.push(`s.tc_vergi = $${params.length}`);
+      where.push(`sa.tc_vergi = $${params.length}`);
     }
     if (durum) { params.push(durum); where.push(`d.durum = $${params.length}`); }
     if (servis_id && req.user.rol === 'admin') { params.push(servis_id); where.push(`d.atanan_servis = $${params.length}`); }

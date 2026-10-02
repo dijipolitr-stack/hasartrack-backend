@@ -11,7 +11,7 @@ const authMiddleware = async (req, res, next) => {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     const { rows } = await query(
-      'SELECT id, ad_soyad, email, rol, servis_id FROM kullanicilar WHERE id=$1 AND aktif=TRUE',
+      'SELECT id, ad_soyad, email, rol, servis_id, tc_no FROM kullanicilar WHERE id=$1 AND aktif=TRUE',
       [payload.id]
     );
     if (!rows.length) return res.status(401).json({ error: 'Kullanıcı bulunamadı' });

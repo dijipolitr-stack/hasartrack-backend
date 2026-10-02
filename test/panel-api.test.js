@@ -622,6 +622,11 @@ test('fotoğraflar: yükle, imzalı URL ile görüntüle, tür/boyut sınırı, 
   assert.equal((await api('PATCH', `${u}/${foto.id}`, S.tokA, { kategori: 'x' })).status, 400);
 
   assert.equal((await api('DELETE', `${u}/${foto.id}`, S.tokB)).status, 403);
+  // Admin'in yüklediği fotoğrafı servis silemez, admin siler
+  const adminFoto = (await yukleIstek(u, S.admin, { bayt: jpeg, mime: 'image/jpeg', ad: 'kaza.jpg' })).body;
+  assert.equal(adminFoto.kategori, 'kaza');
+  assert.equal((await api('DELETE', `${u}/${adminFoto.id}`, S.tokA)).status, 403);
+  assert.equal((await api('DELETE', `${u}/${adminFoto.id}`, S.admin)).status, 200);
   assert.equal((await api('DELETE', `${u}/${foto.id}`, S.tokA)).status, 200);
   assert.equal((await api('DELETE', `${u}/${foto.id}`, S.tokA)).status, 404);
   assert.equal((await fetch(foto.url)).status, 404); // depodan da silindi
@@ -670,4 +675,37 @@ test('dosya silinince audit_log kaydı kalır, bağ NULL olur (006)', async () =
   await sql('DELETE FROM dosyalar WHERE id=$1', [d.id]);
   const kalan = (await sql(`SELECT COUNT(*)::int n FROM audit_log WHERE dosya_id IS NULL AND detay->>'dosya_no'=$1`, [d.dosya_no])).rows[0].n;
   assert.equal(kalan, 1);
+});
+
+test('mesajlar: admin ↔ servis, okunmamış sayısı, okundu işareti, yetki', async () => {
+  const d = (await yeniDosya()).body;
+  const u = `/api/mesajlar/${d.id}`;
+  assert.equal((await api('POST', u, S.admin, { mesaj: 'Servis yok' })).status, 409);
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/servis-ata`, S.admin, { servis_id: S.srvA })).status, 200);
+
+  assert.equal((await api('POST', u, S.admin, { mesaj: '   ' })).status, 400);
+  assert.equal((await api('POST', u, S.admin, { mesaj: 'x'.repeat(2001) })).status, 400);
+  let r = await api('POST', u, S.admin, { mesaj: 'Proforma yarın gelir mi?' });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.hedef_rol, 'servis');
+  assert.equal((await api('POST', u, S.tokB, { mesaj: 'x' })).status, 403);
+
+  // Servis: okunmamış 1, açınca 0; admin tarafında servis cevabı okunmamış
+  r = await api('GET', '/api/mesajlar/okunmamis', S.tokA);
+  assert.equal(r.body.dosyalar[d.id], 1);
+  r = await api('GET', u, S.tokA);
+  assert.equal(r.body.mesajlar.length, 1);
+  assert.equal(r.body.mesajlar[0].gonderen_rol, 'admin');
+  assert.equal((await api('GET', '/api/mesajlar/okunmamis', S.tokA)).body.dosyalar[d.id], undefined);
+  assert.equal((await api('POST', u, S.tokA, { mesaj: 'Evet, öğleden sonra.' })).body.hedef_rol, 'admin');
+  assert.equal((await api('GET', '/api/mesajlar/okunmamis', S.admin)).body.dosyalar[d.id], 1);
+  // isaretle=hayir okundu yapmaz
+  assert.equal((await api('GET', `${u}?isaretle=hayir`, S.admin)).body.mesajlar.length, 2);
+  assert.equal((await api('GET', '/api/mesajlar/okunmamis', S.admin)).body.dosyalar[d.id], 1);
+  assert.ok(!('dosyalar' in ((await api('GET', '/api/mesajlar/okunmamis', S.tokB)).body.dosyalar)) || (await api('GET', '/api/mesajlar/okunmamis', S.tokB)).body.dosyalar[d.id] === undefined);
+  // Admin okuyunca servisin mesajı okundu
+  r = await api('GET', u, S.admin);
+  assert.equal(r.body.mesajlar.length, 2);
+  assert.equal((await api('GET', '/api/mesajlar/okunmamis', S.admin)).body.dosyalar[d.id], undefined);
+  assert.equal((await api('GET', u, S.tokB)).status, 403);
 });

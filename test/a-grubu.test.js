@@ -259,7 +259,10 @@ test('A1 (revize) compose geçerli, build/Dockerfile/railway bağımlılığı y
 test('A11/A12 ön yüz statik: API adresi tek noktada, demo düşme yok, gömülü admin girişi yok', () => {
   const h = fs.readFileSync(path.join(ROOT, '..', 'frontend', 'index.html'), 'utf8');
   assert.equal((h.match(/const API_URL_CANLI/g) || []).length, 1);
-  assert.equal((h.match(/https?:\/\/[^"' ]*\/api/g) || []).filter((u) => !u.includes('localhost')).length, 0, 'sabit uzak API adresi yok');
+  // Uzak API adresi yalnız API_URL_CANLI sabitinde, başka yerde gömülü değil
+  const uzak = (h.match(/https?:\/\/[^"' ]*\/api/g) || []).filter((u) => !u.includes('localhost'));
+  assert.equal(uzak.length, 1, 'uzak API adresi tek noktada');
+  assert.ok(new RegExp(`const API_URL_CANLI = "${uzak[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(h), 'adres API_URL_CANLI içinde');
   assert.ok(!/railway\.app/i.test(h));
   const i = h.indexOf('function AdminGiris');
   const blok = h.slice(i, h.indexOf('function ServisGiris'));
