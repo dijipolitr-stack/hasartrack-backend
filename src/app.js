@@ -75,6 +75,7 @@ app.use((err, req, res, next) => {
   let durum = err.status || 500;
   if (!err.status && PG_400.includes(err.code)) { durum = 400; err.message = 'Geçersiz değer'; }
   else if (!err.status && err.code === '23505') { durum = 409; err.message = 'Kayıt zaten var'; }
+  else if (!err.status && err.code === '22001') { durum = 400; err.message = 'Metin çok uzun'; }
   // Production'da 5xx yanıtı iç ayrıntı sızdırmaz; mesaj yalnız loga yazılır
   const mesaj = durum >= 500 && process.env.NODE_ENV === 'production'
     ? 'Sunucu hatası'

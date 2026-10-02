@@ -318,3 +318,42 @@ test('hesapsız servise şifre: e-posta yoksa 400, varsa hesap açılır ve giri
     ad: 'U'.repeat(150), kullanici_email: `uzun-${RUN}@test.local`, sifre: SERVIS_SIFRE });
   assert.equal(r.status, 201, JSON.stringify(r.body));
 });
+
+test('yetki sıkılaştırma: acente yazamaz, servis kalem onaylayamaz, karar yalnız bekliyor iken, uzun metin 400', async () => {
+  // Acente kullanıcısı (DB'den), login ile token
+  const bcrypt = require('bcrypt');
+  const acenteEmail = `acente-${RUN}@example.com`;
+  await sql(`INSERT INTO kullanicilar (ad_soyad, email, sifre_hash, rol) VALUES ('Test Acente', $1, $2, 'acente')`,
+    [acenteEmail, await bcrypt.hash(SERVIS_SIFRE, 4)]);
+  const acente = (await api('POST', '/api/auth/login', null, { email: acenteEmail, sifre: SERVIS_SIFRE })).body.token;
+  assert.ok(acente);
+
+  const d = (await yeniDosya()).body;
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/servis-ata`, S.admin, { servis_id: S.srvA })).status, 200);
+  const adim = (await api('GET', `/api/dosyalar/${d.id}`, S.admin)).body.onarim_adimlari[0];
+  const kalem = (await api('POST', `/api/islemler/${d.id}`, S.tokA, { kategori: 'Boya', aciklama: 'Test', birim_fiyat: 100 })).body;
+
+  // Acente: okuyabilir, yazamaz
+  assert.equal((await api('GET', `/api/islemler/${d.id}`, acente)).status, 200);
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/adim/${adim.id}/tamamla`, acente)).status, 403);
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, acente, { aciklama: 'x' })).status, 403);
+  assert.equal((await api('DELETE', `/api/islemler/${d.id}/${kalem.id}`, acente)).status, 403);
+  assert.equal((await api('POST', `/api/islemler/${d.id}/toplu`, acente, { kalemler: [{ aciklama: 'x', birim_fiyat: 1 }] })).status, 403);
+
+  // Servis: kalem durumunu değiştiremez, diğer alanları değiştirebilir
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.tokA, { durum: 'onaylandi' })).status, 403);
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.tokA, { aciklama: 'Yeni' })).status, 200);
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.admin, { durum: 'gecersiz' })).status, 400);
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.admin, { durum: 'reddedildi' })).status, 200);
+  assert.equal((await api('POST', `/api/dosyalar/${d.id}/adim/${adim.id}/tamamla`, S.tokA)).status, 200);
+
+  // Admin kararı: taslakta 409, bekliyor iken 200
+  assert.equal((await api('POST', `/api/islemler/${d.id}/admin-karar`, S.admin, { karar: 'onaylandi' })).status, 409);
+  assert.equal((await api('POST', `/api/islemler/${d.id}/onaya-gonder`, S.tokA)).status, 200);
+  assert.equal((await api('POST', `/api/islemler/${d.id}/admin-karar`, S.admin, { karar: 'onaylandi' })).status, 200);
+  assert.equal((await api('POST', `/api/islemler/${d.id}/admin-karar`, S.admin, { karar: 'reddedildi' })).status, 409);
+
+  // Kolon sınırını aşan metin 400 (500 değil)
+  const r = await api('PATCH', `/api/dosyalar/${d.id}`, S.admin, { alt_tablo: 'arac', alan: 'plaka', deger: 'X'.repeat(500) });
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+});

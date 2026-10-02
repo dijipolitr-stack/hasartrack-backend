@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { query, withTransaction } = require('../db');
-const { authMiddleware, onlyAdmin, notMusteri, dosyaErisim } = require('../middleware/auth');
+const { authMiddleware, adminOrServis, onlyAdmin, notMusteri, dosyaErisim } = require('../middleware/auth');
 const { uuidParam, httpHata, alanDegeri, UUID_RE } = require('../lib/dogrula');
 
 router.use(authMiddleware);
@@ -292,7 +292,7 @@ router.post('/:dosyaId/servis-ata', onlyAdmin, dosyaErisim, async (req, res, nex
 
 // ── ADIM TAMAMLA ─────────────────────────────────────────────
 // POST /api/dosyalar/:dosyaId/adim/:adimId/tamamla
-router.post('/:dosyaId/adim/:adimId/tamamla', dosyaErisim, async (req, res, next) => {
+router.post('/:dosyaId/adim/:adimId/tamamla', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId, adimId } = req.params;
     const sonuc = await withTransaction(async (client) => {

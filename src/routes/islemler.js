@@ -1,8 +1,9 @@
 const router = require('express').Router();
 const { query, withTransaction } = require('../db');
-const { authMiddleware, onlyAdmin, dosyaErisim } = require('../middleware/auth');
+const { authMiddleware, onlyAdmin, adminOrServis, dosyaErisim } = require('../middleware/auth');
 
 const { uuidParam } = require('../lib/dogrula');
+const KALEM_DURUM = ['bekliyor', 'onaylandi', 'reddedildi'];
 
 router.use(authMiddleware);
 router.param('dosyaId', uuidParam('dosyaId'));
@@ -50,7 +51,7 @@ router.post('/:dosyaId', dosyaErisim, async (req, res, next) => {
 });
 
 // POST /api/islemler/:dosyaId/toplu — toplu kalem ekle
-router.post('/:dosyaId/toplu', dosyaErisim, async (req, res, next) => {
+router.post('/:dosyaId/toplu', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId } = req.params;
     const { kalemler } = req.body;
@@ -79,7 +80,7 @@ router.post('/:dosyaId/toplu', dosyaErisim, async (req, res, next) => {
 });
 
 // PATCH /api/islemler/:dosyaId/:kalemId — güncelle
-router.patch('/:dosyaId/:kalemId', dosyaErisim, async (req, res, next) => {
+router.patch('/:dosyaId/:kalemId', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId, kalemId } = req.params;
     const { rows: [onay] } = await query('SELECT durum FROM islem_onay WHERE dosya_id=$1', [dosyaId]);
@@ -89,6 +90,13 @@ router.patch('/:dosyaId/:kalemId', dosyaErisim, async (req, res, next) => {
       return res.status(409).json({ error: 'Onaylanan kalemler değiştirilemez' });
 
     const { kategori, aciklama, birim, miktar, birim_fiyat, durum } = req.body;
+    // Kalem durumu (onay/red) yalnız admin kararıdır
+    if (durum !== undefined && durum !== null) {
+      if (req.user.rol !== 'admin')
+        return res.status(403).json({ error: 'Kalem durumunu yalnız admin değiştirebilir' });
+      if (!KALEM_DURUM.includes(durum))
+        return res.status(400).json({ error: 'Geçersiz kalem durumu' });
+    }
     const { rows: [kalem] } = await query(
       `UPDATE islemler SET
          kategori=COALESCE($1,kategori), aciklama=COALESCE($2,aciklama),
@@ -104,7 +112,7 @@ router.patch('/:dosyaId/:kalemId', dosyaErisim, async (req, res, next) => {
 });
 
 // DELETE /api/islemler/:dosyaId/:kalemId
-router.delete('/:dosyaId/:kalemId', dosyaErisim, async (req, res, next) => {
+router.delete('/:dosyaId/:kalemId', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId, kalemId } = req.params;
     const { rows: [onay] } = await query('SELECT durum FROM islem_onay WHERE dosya_id=$1', [dosyaId]);
@@ -141,6 +149,10 @@ router.post('/:dosyaId/admin-karar', onlyAdmin, dosyaErisim, async (req, res, ne
     const { karar, not_metni } = req.body; // karar: 'onaylandi' | 'reddedildi'
     if (!['onaylandi','reddedildi'].includes(karar))
       return res.status(400).json({ error: 'Karar "onaylandi" veya "reddedildi" olmalı' });
+
+    const { rows: [onay] } = await query('SELECT durum FROM islem_onay WHERE dosya_id=$1', [dosyaId]);
+    if (onay?.durum !== 'bekliyor')
+      return res.status(409).json({ error: 'Karar yalnız onay bekleyen kalemler için verilebilir' });
 
     await withTransaction(async (client) => {
       await client.query(
