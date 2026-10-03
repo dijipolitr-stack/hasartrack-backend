@@ -20,6 +20,9 @@ const raporRoutes   = require('./routes/raporlar');
 const takipRoutes   = require('./routes/takip');
 const tutanakRoutes = require('./routes/tutanak');
 const modulRoutes   = require('./routes/moduller');
+const dviRoutes     = require('./routes/dvi');
+const protokolRoutes = require('./routes/protokoller');
+const ikameRoutes   = require('./routes/ikame');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   // Serverless'ta process.exit işe yaramaz; throw hem yerelde (çıkış kodu 1) hem Vercel'de net hata verir
@@ -74,6 +77,9 @@ app.use('/api/raporlar',   raporRoutes);
 app.use('/api/takip',      takipRoutes);
 app.use('/api/tutanaklar', tutanakRoutes);
 app.use('/api/moduller',  modulRoutes);
+app.use('/api/dvi',       dviRoutes);
+app.use('/api/protokoller', protokolRoutes);
+app.use('/api/ikame',     ikameRoutes);
 
 // ── SAĞLIK KONTROLÜ ─────────────────────────────────────────
 app.get('/health', (req, res) => {
@@ -90,6 +96,7 @@ app.use((err, req, res, next) => {
   if (!err.status && PG_400.includes(err.code)) { durum = 400; err.message = 'Geçersiz değer'; }
   else if (!err.status && err.code === '23505') { durum = 409; err.message = 'Kayıt zaten var'; }
   else if (!err.status && err.code === '22001') { durum = 400; err.message = 'Metin çok uzun'; }
+  else if (!err.status && err.code === '23514') { durum = 400; err.message = 'Geçersiz değer'; }
   // Production'da 5xx yanıtı iç ayrıntı sızdırmaz; mesaj yalnız loga yazılır
   const mesaj = durum >= 500 && process.env.NODE_ENV === 'production'
     ? 'Sunucu hatası'

@@ -58,7 +58,7 @@ test('A2 migrate: boş DB, 17 tablo + migrations, 2. çalışma atlar, RLS açı
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Şema uygulandı/);
   const t = await sql("SELECT count(*)::int n FROM pg_tables WHERE schemaname='public'");
-  assert.equal(t.rows[0].n, 30); // schema.sql 17 + migrations (12 tablo) + schema_migrations
+  assert.equal(t.rows[0].n, 34); // schema.sql 17 + migrations (16 tablo) + schema_migrations
   r = run('src/db/migrate.js');
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Şema var, atlandı/);

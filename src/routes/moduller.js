@@ -378,4 +378,21 @@ router.get('/bi', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/moduller/sistem — kullanıcılar, servis hesapları, şema sürümü (yalnız admin; şifre özeti dönmez)
+router.get('/sistem', async (req, res, next) => {
+  try {
+    if (req.user.rol !== 'admin') throw httpHata(403, 'Bu işlem için yetkiniz yok');
+    const [{ rows: roller }, { rows: hesaplar }, { rows: migr }, { rows: [db] }, { rows: tablolar }] = await Promise.all([
+      query(`SELECT rol, COUNT(*)::int AS toplam, COUNT(*) FILTER (WHERE aktif)::int AS aktif FROM kullanicilar GROUP BY rol ORDER BY rol`),
+      query(`SELECT k.id, k.ad_soyad, k.email, k.rol, k.aktif, k.son_giris, k.created_at, s.ad AS servis_ad
+             FROM kullanicilar k LEFT JOIN servisler s ON s.id=k.servis_id
+             WHERE k.rol IN ('admin','servis') ORDER BY k.rol, s.ad NULLS FIRST, k.email`),
+      query(`SELECT ad, uygulama_trh FROM schema_migrations ORDER BY ad`),
+      query(`SELECT current_setting('server_version') AS surum, NOW() AS saat, pg_database_size(current_database()) AS boyut`),
+      query(`SELECT COUNT(*)::int AS n FROM pg_tables WHERE schemaname='public'`),
+    ]);
+    res.json({ roller, hesaplar, migrations: migr, veritabani: { ...db, tablo: tablolar[0].n } });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
