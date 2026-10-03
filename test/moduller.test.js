@@ -45,7 +45,7 @@ test('hazırlık: iki servis, her birine bir dosya, tutanak, görev, link, eksik
     const s = await api('POST', '/api/servisler', S.admin, { ad: `Modul Servis ${k} ${RUN}`, kullanici_email: `modul-${k}-${RUN}@example.com`, sifre: SIFRE });
     assert.equal(s.status, 201, JSON.stringify(s.body));
     S[`tok${k}`] = (await api('POST', '/api/auth/servis-login', null, { servis_id: s.body.id, sifre: SIFRE })).body.token;
-    const d = await api('POST', '/api/dosyalar', S.admin, { arac: { plaka, marka: 'Fiat', model: 'Egea', yil: 2022 }, sahip: { adSoyad: `Sahip ${k}`, telefon: '05321112233' }, sigorta: { sirketAd: `Sigorta ${k}`, hasarNo: `M-${k}-${RUN}` }, kaza: { tarih: '2026-03-01' } });
+    const d = await api('POST', '/api/dosyalar', S.admin, { arac: { plaka, marka: 'Fiat', model: 'Egea', yil: 2022 }, sahip: { adSoyad: `Sahip ${k}`, telefon: '05321112233' }, sigorta: { sirketAd: `Sigorta ${k} ${RUN}`, hasarNo: `M-${k}-${RUN}` }, kaza: { tarih: '2026-03-01' } });
     assert.equal(d.status, 201);
     S[`dosya${k}`] = d.body.id;
     assert.equal((await api('POST', `/api/dosyalar/${d.body.id}/servis-ata`, S.admin, { servis_id: s.body.id })).status, 200);
@@ -82,7 +82,7 @@ test('ekspertiz: sigorta ve tutarlar; servis kapsamı', async () => {
   const ik = `/api/islemler/${S.dosyaA}`;
   assert.equal((await api('POST', ik, S.tokA, { kategori: 'Boya', aciklama: 'Kapı', miktar: 2, birim_fiyat: 1500 })).status, 201);
   const a = bul((await api('GET', '/api/moduller/ekspertiz', S.admin)).body.dosyalar, S.dosyaA);
-  assert.equal(a.sirket_ad, 'Sigorta A');
+  assert.equal(a.sirket_ad, `Sigorta A ${RUN}`);
   assert.equal(Number(a.teklif_tutar), 3000);
   assert.equal(Number(a.onaylanan_tutar), 0);
   assert.equal(a.eksper_onay, 'Beklemede');
@@ -117,4 +117,59 @@ test('portal: link listesi token içermez; linksiz aktif dosya listelenir', asyn
   assert.ok(!p.linksiz.some((x) => x.dosya_id === S.dosyaA));
   const pB = (await api('GET', '/api/moduller/portal', S.tokB)).body;
   assert.ok(!pB.linkler.some((x) => x.dosya_id === S.dosyaA));
+});
+
+// ── Paket 2 ──
+test('finans: servis faturası alacak olarak gelir, kalan hesaplanır; servis B görmez', async () => {
+  const r = await api('POST', `/api/faturalar/${S.dosyaA}/servis`, S.tokA, { alici_tipi: 'sigorta', alici_ad: 'Sigorta A', tutar: 1000, kdv_orani: 20, odenen_tutar: 200 });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const f = (await api('GET', '/api/moduller/finans', S.admin)).body;
+  const x = f.faturalar.find((y) => y.dosya_id === S.dosyaA);
+  assert.ok(x); assert.equal(Number(x.toplam), 1200); assert.equal(Number(x.kalan), 1000);
+  assert.ok(Array.isArray(f.dis_faturalar));
+  assert.ok(!(await api('GET', '/api/moduller/finans', S.tokB)).body.faturalar.some((y) => y.dosya_id === S.dosyaA));
+});
+
+test('plan: aktif dosya görevleriyle gelir', async () => {
+  const p = (await api('GET', '/api/moduller/plan', S.admin)).body.dosyalar;
+  const x = p.find((y) => y.dosya_id === S.dosyaA);
+  assert.ok(x); assert.equal(x.gorevler.length, 1); assert.equal(x.gorevler[0].bolum, 'boya');
+  assert.equal(x.ilerleme, 0);
+});
+
+test('siparişler ve tedarikçiler: gecikme ve tutar; servis kapsamı', async () => {
+  const ted = (await api('POST', '/api/stok/tedarikciler', S.tokA, { ad: `Ted ${RUN}` })).body;
+  const r = await api('POST', '/api/stok/siparisler', S.tokA, { tedarikci_id: ted.id, dosya_id: S.dosyaA, tahmini_gelis: '2020-01-01', kalemler: [{ yeni_parca: { ad: `Far ${RUN}` }, adet: 2, birim_fiyat: 500 }] });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const s = (await api('GET', '/api/moduller/siparisler', S.admin)).body.siparisler.find((y) => y.tedarikci_id === ted.id);
+  assert.ok(s); assert.equal(s.geciken, true); assert.equal(Number(s.toplam), 1000); assert.equal(s.plaka, PLAKA_A);
+  assert.ok(!(await api('GET', '/api/moduller/siparisler', S.tokB)).body.siparisler.some((y) => y.tedarikci_id === ted.id));
+  const t = (await api('GET', '/api/moduller/tedarikciler', S.admin)).body.tedarikciler.find((y) => y.id === ted.id);
+  assert.equal(t.siparis_sayisi, 1); assert.equal(t.geciken_acik, 1); assert.equal(Number(t.toplam_tutar), 1000);
+  assert.ok(!(await api('GET', '/api/moduller/tedarikciler', S.tokB)).body.tedarikciler.some((y) => y.id === ted.id));
+});
+
+test('operasyon: bekleyen onay, geciken teslim ve parça; adım süreleri', async () => {
+  await sql("UPDATE onarim_merkezi SET tahmini_teslimat=CURRENT_DATE-3 WHERE dosya_id=$1", [S.dosyaA]);
+  const det = (await api('GET', `/api/dosyalar/${S.dosyaA}`, S.admin)).body;
+  assert.equal((await api('POST', `/api/dosyalar/${S.dosyaA}/adim/${det.onarim_adimlari[0].id}/tamamla`, S.tokA)).status, 200);
+  const o = (await api('GET', '/api/moduller/operasyon', S.admin)).body;
+  assert.ok(o.bekleyen_onaylar.some((y) => y.dosya_id === S.dosyaA));
+  const t = o.geciken_teslimler.find((y) => y.dosya_id === S.dosyaA);
+  assert.ok(t); assert.equal(t.gecikme_gun, 3);
+  assert.ok(o.geciken_siparisler.some((y) => y.plaka === PLAKA_A));
+  assert.ok(o.adim_sureleri.some((y) => y.ad === 'Araç Kabulü' && y.adet >= 1));
+  const oB = (await api('GET', '/api/moduller/operasyon', S.tokB)).body;
+  assert.ok(!oB.geciken_teslimler.some((y) => y.dosya_id === S.dosyaA));
+  assert.ok(!oB.geciken_siparisler.some((y) => y.plaka === PLAKA_A));
+});
+
+test('bi: yalnız admin; 12 aylık seri, sigorta ve servis kırılımı', async () => {
+  assert.equal((await api('GET', '/api/moduller/bi', S.tokA)).status, 403);
+  const b = (await api('GET', '/api/moduller/bi', S.admin)).body;
+  assert.equal(b.aylik.length, 12);
+  assert.ok(b.aylik[11].acilan >= 2);
+  assert.ok(b.sigorta.some((y) => y.ad === `Sigorta A ${RUN}` && y.dosya === 1 && Number(y.teklif) === 3000));
+  assert.ok(b.servis.some((y) => y.ad === `Modul Servis A ${RUN}` && y.aktif === 1));
+  assert.ok(b.genel.dosya >= 2);
 });
