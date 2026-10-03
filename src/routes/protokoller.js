@@ -1,8 +1,8 @@
 // Sigorta protokolleri ve dosya teklifinin protokole göre kontrolü.
-// Protokol yazma yalnız admin; okuma admin + servis. Kontrol: dosyaya erişen admin/servis.
+// Protokol okuma ve yazma admin + servis. Kontrol: dosyaya erişen admin/servis.
 const router = require('express').Router();
 const { query } = require('../db');
-const { authMiddleware, onlyAdmin, adminOrServis, dosyaErisim } = require('../middleware/auth');
+const { authMiddleware, adminOrServis, dosyaErisim } = require('../middleware/auth');
 const { uuidParam, httpHata, alanDegeri } = require('../lib/dogrula');
 
 router.use(authMiddleware, adminOrServis);
@@ -48,8 +48,8 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/protokoller (admin)
-router.post('/', onlyAdmin, async (req, res, next) => {
+// POST /api/protokoller
+router.post('/', async (req, res, next) => {
   try {
     const d = alanlar(req.body || {}, false);
     const k = Object.keys(d);
@@ -60,8 +60,8 @@ router.post('/', onlyAdmin, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PATCH /api/protokoller/:id (admin)
-router.patch('/:id', onlyAdmin, async (req, res, next) => {
+// PATCH /api/protokoller/:id
+router.patch('/:id', async (req, res, next) => {
   try {
     const d = alanlar(req.body || {}, true);
     const k = Object.keys(d);

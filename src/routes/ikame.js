@@ -1,11 +1,11 @@
-// İkame araç filosu: araçlar, verme ve iade. Filo hasar merkezinindir; yazma yalnız admin.
+// İkame araç filosu: araçlar, verme ve iade. Admin ve servis kullanır; servis yalnız kendi dosyasına araç bağlar.
 // Bir araç aynı anda tek açık kullanımda olur (DB'de kısmi benzersiz indeks).
 const router = require('express').Router();
 const { query, withTransaction } = require('../db');
-const { authMiddleware, onlyAdmin } = require('../middleware/auth');
+const { authMiddleware, adminOrServis } = require('../middleware/auth');
 const { uuidParam, httpHata, alanDegeri, UUID_RE } = require('../lib/dogrula');
 
-router.use(authMiddleware, onlyAdmin);
+router.use(authMiddleware, adminOrServis);
 router.param('id', uuidParam('id'));
 
 const metin = (v, ad, maks, zorunlu = false) => {
@@ -83,8 +83,9 @@ router.post('/ver', async (req, res, next) => {
       if (!a) throw httpHata(404, 'Araç bulunamadı');
       if (a.durum !== 'musait') throw httpHata(409, `Araç müsait değil (${a.durum})`);
       if (b.dosya_id) {
-        const { rowCount } = await c.query('SELECT 1 FROM dosyalar WHERE id=$1', [b.dosya_id]);
-        if (!rowCount) throw httpHata(404, 'Dosya bulunamadı');
+        const { rows: [d] } = await c.query('SELECT atanan_servis FROM dosyalar WHERE id=$1', [b.dosya_id]);
+        if (!d) throw httpHata(404, 'Dosya bulunamadı');
+        if (req.user.rol === 'servis' && d.atanan_servis !== req.user.servis_id) throw httpHata(403, 'Bu dosyaya erişiminiz yok');
       }
       const vkm = km(b.verilis_km, 'Veriliş kilometresi') ?? a.km;
       if (vkm < a.km) throw httpHata(400, `Kilometre aracın kaydından (${a.km}) düşük olamaz`);

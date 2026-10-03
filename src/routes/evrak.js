@@ -2,7 +2,7 @@
 // Belge yükleme ve durum: admin ve atanmış servis. Evrak ekleme/silme: admin.
 const router = require('express').Router();
 const { query } = require('../db');
-const { authMiddleware, onlyAdmin, adminOrServis, notMusteri, dosyaErisim } = require('../middleware/auth');
+const { authMiddleware, adminOrServis, notMusteri, dosyaErisim } = require('../middleware/auth');
 const { uuidParam, httpHata } = require('../lib/dogrula');
 const depo = require('../lib/depo');
 const { tekDosya, anahtarUret, tabanUrl, dosyaAdi, BELGE } = require('../lib/yukleme');
@@ -95,8 +95,8 @@ router.patch('/:dosyaId/:evrakId', adminOrServis, dosyaErisim, async (req, res, 
   } catch (err) { next(err); }
 });
 
-// DELETE /api/evrak/:dosyaId/:evrakId — yalnız admin
-router.delete('/:dosyaId/:evrakId', onlyAdmin, dosyaErisim, async (req, res, next) => {
+// DELETE /api/evrak/:dosyaId/:evrakId — admin veya atanmış servis
+router.delete('/:dosyaId/:evrakId', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
     const { rows: [e] } = await query(
       'DELETE FROM evrak WHERE id=$1 AND dosya_id=$2 RETURNING url', [req.params.evrakId, req.params.dosyaId]);

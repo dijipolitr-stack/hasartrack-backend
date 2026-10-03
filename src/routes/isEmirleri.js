@@ -2,7 +2,7 @@
 // bitiren usta adıyla bildirir. Bildirilmeyen görev açık kalır.
 const router = require('express').Router();
 const { query, withTransaction } = require('../db');
-const { authMiddleware, onlyAdmin, adminOrServis, notMusteri, dosyaErisim } = require('../middleware/auth');
+const { authMiddleware, adminOrServis, notMusteri, dosyaErisim } = require('../middleware/auth');
 const { uuidParam, httpHata } = require('../lib/dogrula');
 const { BOLUMLER, anaIsEmri, isEmriBul } = require('../lib/isEmri');
 
@@ -54,8 +54,10 @@ router.get('/pano', adminOrServis, async (req, res, next) => {
 });
 
 // GET /api/is-emirleri/bekleyen-onaylar — onay bekleyen iş emirleri, kaç gündür bekliyor
-router.get('/bekleyen-onaylar', onlyAdmin, async (req, res, next) => {
+router.get('/bekleyen-onaylar', adminOrServis, async (req, res, next) => {
   try {
+    const params = [];
+    const f = req.user.rol === 'servis' ? (params.push(req.user.servis_id), ' AND d.atanan_servis=$1') : '';
     const { rows } = await query(`
       SELECT ie.id, ie.no, ie.tur, ie.aciklama, ie.gonderim_trh, ${gun('ie.gonderim_trh')} AS gun,
              d.id AS dosya_id, d.dosya_no, a.plaka, srv.ad AS servis_ad,
@@ -65,8 +67,8 @@ router.get('/bekleyen-onaylar', onlyAdmin, async (req, res, next) => {
       JOIN dosyalar d ON d.id=ie.dosya_id
       LEFT JOIN arac a ON a.dosya_id=d.id
       LEFT JOIN servisler srv ON srv.id=d.atanan_servis
-      WHERE ie.onay_durumu='bekliyor' AND ie.durum<>'iptal'
-      ORDER BY ie.gonderim_trh`);
+      WHERE ie.onay_durumu='bekliyor' AND ie.durum<>'iptal'${f}
+      ORDER BY ie.gonderim_trh`, params);
     res.json({ onaylar: rows });
   } catch (err) { next(err); }
 });

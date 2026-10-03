@@ -2,7 +2,7 @@
 // (ana iş emri + ek hasar iş emirleri). is_emri_id verilmezse ana iş emri kullanılır.
 const router = require('express').Router();
 const { query, withTransaction } = require('../db');
-const { authMiddleware, onlyAdmin, adminOrServis, dosyaErisim } = require('../middleware/auth');
+const { authMiddleware, adminOrServis, dosyaErisim } = require('../middleware/auth');
 const { uuidParam, httpHata } = require('../lib/dogrula');
 const { anaIsEmri, isEmriBul, kalemDuzenlenebilir } = require('../lib/isEmri');
 
@@ -100,23 +100,19 @@ const kalemBul = async (dosyaId, kalemId) => {
 };
 
 // PATCH /api/islemler/:dosyaId/:kalemId — güncelle
-// Servis: iş emri taslak/reddedildi iken. Admin: ayrıca onay beklerken (kalem bazında onay/red).
+// Taslak/reddedildi iken düzenlenir; onay beklerken kalem bazında onay/red (admin veya atanmış servis).
 router.patch('/:dosyaId/:kalemId', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId, kalemId } = req.params;
     const k = await kalemBul(dosyaId, kalemId);
     if (k.is_emri_durum === 'iptal')
       return res.status(409).json({ error: 'İş emri iptal edildi, değişiklik yapılamaz' });
-    if (k.onay_durumu === 'bekliyor' && req.user.rol !== 'admin')
-      return res.status(409).json({ error: 'Onay sürecinde servis değişiklik yapamaz' });
     if (k.onay_durumu === 'onaylandi')
       return res.status(409).json({ error: 'Onaylanan kalemler değiştirilemez' });
 
     const { kategori, aciklama, birim, miktar, birim_fiyat, durum } = req.body;
-    // Kalem durumu (onay/red) yalnız admin kararıdır
+    // Kalem durumu (onay/red) onay kararının parçasıdır (admin veya atanmış servis)
     if (durum !== undefined && durum !== null) {
-      if (req.user.rol !== 'admin')
-        return res.status(403).json({ error: 'Kalem durumunu yalnız admin değiştirebilir' });
       if (!KALEM_DURUM.includes(durum))
         return res.status(400).json({ error: 'Geçersiz kalem durumu' });
       if (k.onay_durumu !== 'bekliyor')
@@ -169,12 +165,12 @@ router.post('/:dosyaId/onaya-gonder', dosyaErisim, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/islemler/:dosyaId/admin-karar — admin kararı girer
+// POST /api/islemler/:dosyaId/admin-karar — onay kararı (admin veya atanmış servis)
 // { karar, not_metni?, is_emri_id?, eksper_ad?, musteri_ad? }
 // Onayda: sigorta kalemlerini eksper, müşteri kalemlerini müşteri onaylamış sayılır; admin
 // kararı onların adına girer. Ad verilmezse dosyadaki eksper / araç sahibi adı kullanılır.
 // Admin'in tek tek reddettiği kalemler reddedilmiş kalır.
-router.post('/:dosyaId/admin-karar', onlyAdmin, dosyaErisim, async (req, res, next) => {
+router.post('/:dosyaId/admin-karar', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId } = req.params;
     const { karar, not_metni } = req.body; // karar: 'onaylandi' | 'reddedildi'

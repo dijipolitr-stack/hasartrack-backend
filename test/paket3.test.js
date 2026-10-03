@@ -74,8 +74,8 @@ test('DVI: ekle, doğrulama, güncelle, sil; yetki ve özet', async () => {
   assert.equal((await api('DELETE', `${u}/${id}`, S.tokA)).status, 404);
 });
 
-test('protokol: yalnız admin yazar; doğrulama; dosya kontrolü hesapları', async () => {
-  assert.equal((await api('POST', '/api/protokoller', S.tokA, { sirket_ad: SIRKET, baslangic: '2026-01-01' })).status, 403);
+test('protokol: admin ve servis yazar; doğrulama; dosya kontrolü hesapları', async () => {
+  assert.equal((await api('POST', '/api/protokoller', S.tokA, { sirket_ad: `${SIRKET} servis`, baslangic: '2026-01-01' })).status, 201, 'servis de protokol girer');
   assert.equal((await api('POST', '/api/protokoller', S.admin, { sirket_ad: SIRKET, baslangic: '2026-05-01', bitis: '2026-01-01' })).status, 400);
   assert.equal((await api('POST', '/api/protokoller', S.admin, { sirket_ad: SIRKET, baslangic: '2026-01-01', parca_iskonto_yuzde: 120 })).status, 400);
   // Kontrol: protokol yokken null
@@ -107,12 +107,13 @@ test('protokol: yalnız admin yazar; doğrulama; dosya kontrolü hesapları', as
   assert.equal(liste.gecerli, false); assert.equal(liste.aktif_dosya, 1);
 });
 
-test('ikame: yalnız admin; ver, ikinci kez verme 409, iade km kontrolü, durum', async () => {
-  assert.equal((await api('GET', '/api/ikame', S.tokA)).status, 403);
+test('ikame: admin ve servis; servis başka servisin dosyasına araç bağlayamaz; ver, 409, iade km, durum', async () => {
+  assert.equal((await api('GET', '/api/ikame', S.tokA)).status, 200);
   const plaka = `34 IKM ${RUN.slice(0, 3).toUpperCase()}`;
   const a = await api('POST', '/api/ikame/araclar', S.admin, { plaka: plaka.toLowerCase(), marka: 'Renault', model: 'Clio', km: 15000, yakit_yuzde: 75 });
   assert.equal(a.status, 201, JSON.stringify(a.body)); assert.equal(a.body.plaka, plaka);
   assert.equal((await api('POST', '/api/ikame/araclar', S.admin, { plaka })).status, 409, 'aynı plaka');
+  assert.equal((await api('POST', '/api/ikame/ver', S.tokB, { arac_id: a.body.id, dosya_id: S.dosya, surucu_ad: 'X' })).status, 403, 'B, A dosyasına bağlayamaz');
   assert.equal((await api('POST', '/api/ikame/ver', S.admin, { arac_id: a.body.id, surucu_ad: 'Ali', verilis_km: 100 })).status, 400, 'km düşük');
   const v = await api('POST', '/api/ikame/ver', S.admin, { arac_id: a.body.id, dosya_id: S.dosya, surucu_ad: 'Ali Veli' });
   assert.equal(v.status, 201, JSON.stringify(v.body)); assert.equal(v.body.verilis_km, 15000); assert.equal(v.body.verilis_yakit, 75);

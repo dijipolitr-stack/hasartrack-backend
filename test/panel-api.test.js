@@ -138,14 +138,21 @@ test('K3-4 servis girişi: liste yalnız id+ad, login 200/401/400', async () => 
   assert.equal((await api('POST', '/api/auth/servis-login', null, { servis_id: S.srvA })).status, 400);
 });
 
-test('yetki: servis PATCH, POST dosya, /servisler, /raporlar için 403', async () => {
+test('yetki: servis /servisler, /raporlar, servis-ata 403; atanmamış dosyayı düzenleyemez; kendi açtığı dosya kendine atanır', async () => {
   const d = await yeniDosya();
   assert.equal(d.status, 201);
   S.dosyaId = d.body.id;
   assert.equal((await api('GET', '/api/servisler', S.tokA)).status, 403);
   assert.equal((await api('GET', '/api/raporlar/ozet', S.tokA)).status, 403);
-  assert.equal((await api('POST', '/api/dosyalar', S.tokA, {})).status, 403);
-  assert.equal((await api('PATCH', `/api/dosyalar/${S.dosyaId}`, S.tokA, { alan: 'durum', deger: 'Aktif' })).status, 403);
+  assert.equal((await api('POST', '/api/dosyalar', S.tokA, {})).status, 400, 'servis dosya açabilir, telefon zorunlu');
+  assert.equal((await api('PATCH', `/api/dosyalar/${S.dosyaId}`, S.tokA, { alan: 'durum', deger: 'Aktif' })).status, 403, 'atanmamış dosya');
+  const sd = await api('POST', '/api/dosyalar', S.tokA, { arac: { plaka: '34SRV' + RUN.slice(0, 3).toUpperCase(), marka: 'X', model: 'Y', yil: 2020 }, sahip: { adSoyad: 'Servis Müşterisi', telefon: '05320000000' }, sigorta: { sirketAd: 'S', hasarNo: 'SRV-' + RUN }, kaza: { tarih: '2026-02-15' } });
+  assert.equal(sd.status, 201, JSON.stringify(sd.body));
+  assert.equal(sd.body.atanan_servis, S.srvA, 'servisin açtığı dosya kendisine atanır');
+  assert.equal((await api('PATCH', `/api/dosyalar/${sd.body.id}`, S.tokA, { alt_tablo: 'eksper', alan: 'ad_soyad', deger: 'Servis Eksper' })).status, 200);
+  assert.equal((await api('PATCH', `/api/dosyalar/${sd.body.id}`, S.tokB, { alan: 'durum', deger: 'Aktif' })).status, 403, 'başka servis');
+  assert.equal((await api('PATCH', `/api/dosyalar/${sd.body.id}`, S.tokA, { alan: 'atanan_servis', deger: S.srvB })).status, 400, 'servis ataması bu uçtan değişmez');
+  assert.equal((await api('POST', `/api/dosyalar/${sd.body.id}/servis-ata`, S.tokA, { servis_id: S.srvB })).status, 403);
   assert.equal((await api('POST', `/api/dosyalar/${S.dosyaId}/servis-ata`, S.tokA, { servis_id: S.srvA })).status, 403);
   assert.equal((await api('GET', '/api/dosyalar')).status, 401);
 });
@@ -283,7 +290,7 @@ test('K12 işlemler: servis ekler/gönderir, admin onaylar, onaylanan_tutar = to
   assert.equal(r.status, 201);
   assert.equal((await api('POST', `${url}/onaya-gonder`, S.tokA)).status, 200);
   assert.equal((await api('POST', url, S.tokA, { aciklama: 'Geç', birim_fiyat: 1 })).status, 409);
-  assert.equal((await api('POST', `${url}/admin-karar`, S.tokA, { karar: 'onaylandi' })).status, 403);
+  assert.equal((await api('POST', `${url}/admin-karar`, S.tokB, { karar: 'onaylandi' })).status, 403, 'başka servis karar veremez');
   assert.equal((await api('POST', `/api/islemler/${crypto.randomUUID()}/admin-karar`, S.admin, { karar: 'onaylandi' })).status, 404);
   // Eksper adı verilmedi: dosyanın eksper kaydındaki ad kullanılır (K8-9'da girildi)
   assert.equal((await api('POST', `${url}/admin-karar`, S.admin, { karar: 'onaylandi' })).status, 200);
@@ -343,8 +350,9 @@ test('yetki sıkılaştırma: acente yazamaz, servis kalem onaylayamaz, karar ya
   assert.equal((await api('DELETE', `/api/islemler/${d.id}/${kalem.id}`, acente)).status, 403);
   assert.equal((await api('POST', `/api/islemler/${d.id}/toplu`, acente, { kalemler: [{ aciklama: 'x', birim_fiyat: 1 }] })).status, 403);
 
-  // Servis: kalem durumunu değiştiremez, diğer alanları değiştirebilir
-  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.tokA, { durum: 'onaylandi' })).status, 403);
+  // Servis: kalem kararı da verebilir (yalnız onay beklerken), başka servis dokunamaz
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.tokA, { durum: 'onaylandi' })).status, 409);
+  assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.tokB, { durum: 'onaylandi' })).status, 403);
   assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.tokA, { aciklama: 'Yeni' })).status, 200);
   assert.equal((await api('PATCH', `/api/islemler/${d.id}/${kalem.id}`, S.admin, { durum: 'gecersiz' })).status, 400);
   // Kalem kararı yalnız onay bekleyen iş emrinde
@@ -441,8 +449,9 @@ test('faturalar: kalem ödeyeni, pay özeti, çoklu servis faturası, dış hizm
   assert.equal((await api('DELETE', `${u}/dis/${df.id}`, S.tokA)).status, 404);
   assert.equal((await api('DELETE', `${u}/servis/${sf.id}`, S.tokA)).status, 200);
 
-  // Servis muhasebe PATCH'i yapamaz (fatura artık servis_faturalari'nda)
-  assert.equal((await api('PATCH', `/api/dosyalar/${d.id}`, S.tokA, { alt_tablo: 'muhasebe', alan: 'servis_fatura_no', deger: 'x' })).status, 403);
+  // Eski servis_fatura_* alanları yazılamaz (fatura servis_faturalari'nda); muhasebe notu servis de yazar
+  assert.equal((await api('PATCH', `/api/dosyalar/${d.id}`, S.tokA, { alt_tablo: 'muhasebe', alan: 'servis_fatura_no', deger: 'x' })).status, 400);
+  assert.equal((await api('PATCH', `/api/dosyalar/${d.id}`, S.tokA, { alt_tablo: 'muhasebe', alan: 'notlar', deger: 'Servis notu' })).status, 200);
 });
 
 test('iş emri ve bölüm görevleri: usta bildirimi, onarım adımı açık görevle kapanmaz, pano', async () => {
@@ -538,7 +547,8 @@ test('ek hasar: ana onaydan önce 409, ayrı onay turu, eksper/müşteri onaylay
   r = await api('GET', '/api/is-emirleri/bekleyen-onaylar', S.admin);
   const bo = r.body.onaylar.find((o) => o.id === ek.id);
   assert.ok(bo && bo.no === 2 && Number(bo.tutar) === 3500 && bo.gun === 0);
-  assert.equal((await api('GET', '/api/is-emirleri/bekleyen-onaylar', S.tokA)).status, 403);
+  assert.ok((await api('GET', '/api/is-emirleri/bekleyen-onaylar', S.tokA)).body.onaylar.some((o) => o.id === ek.id), 'servis kendi bekleyen onayını görür');
+  assert.ok(!(await api('GET', '/api/is-emirleri/bekleyen-onaylar', S.tokB)).body.onaylar.some((o) => o.id === ek.id), 'başka servis görmez');
 
   // Karar: dosyada eksper yok, sahip var -> müşteri adı sahipten gelir, eksper adı zorunlu
   const karar = (b) => api('POST', `${ik}/admin-karar`, S.admin, { is_emri_id: ek.id, ...b });
@@ -664,8 +674,9 @@ test('evrak: varsayılan liste, belge yükle (PDF), durum, ekle/sil yetkisi', as
   assert.equal(r.status, 201);
   assert.equal(r.body.sira, 10);
   assert.equal((await api('POST', u, S.tokA, { ad: '  ' })).status, 400);
-  assert.equal((await api('DELETE', `${u}/${r.body.id}`, S.tokA)).status, 403);
-  assert.equal((await api('DELETE', `${u}/${r.body.id}`, S.admin)).status, 200);
+  assert.equal((await api('DELETE', `${u}/${r.body.id}`, S.tokB)).status, 403);
+  assert.equal((await api('DELETE', `${u}/${r.body.id}`, S.tokA)).status, 200);
+  assert.equal((await api('DELETE', `${u}/${r.body.id}`, S.admin)).status, 404);
 });
 
 test('dosya silinince audit_log kaydı kalır, bağ NULL olur (006)', async () => {

@@ -118,8 +118,8 @@ router.get('/:dosyaId', dosyaErisim, async (req, res, next) => {
 });
 
 // ── YENİ DOSYA ────────────────────────────────────────────────
-// POST /api/dosyalar
-router.post('/', onlyAdmin, async (req, res, next) => {
+// POST /api/dosyalar — admin veya servis; servisin açtığı dosya kendisine atanır
+router.post('/', adminOrServis, async (req, res, next) => {
   try {
     const { arac: aracData, sahip: sahipData, sigorta: sigortaData, kaza } = req.body;
     if (!sahipData?.telefon)
@@ -129,9 +129,10 @@ router.post('/', onlyAdmin, async (req, res, next) => {
       // Ana dosya
       const dosyaNo = (await client.query('SELECT next_dosya_no() as no')).rows[0].no;
       const { rows: [dosya] } = await client.query(
-        `INSERT INTO dosyalar (dosya_no, sigorta_bransi, muallak_hasar, olusturan_id)
-         VALUES ($1, $2, $3, $4) RETURNING *`,
-        [dosyaNo, sigortaData?.bransi, sigortaData?.muallakHasar, req.user.id]
+        `INSERT INTO dosyalar (dosya_no, sigorta_bransi, muallak_hasar, olusturan_id, atanan_servis)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [dosyaNo, sigortaData?.bransi, sigortaData?.muallakHasar, req.user.id,
+         req.user.rol === 'servis' ? req.user.servis_id : null]
       );
 
       // Araç
@@ -253,7 +254,8 @@ const ALANLAR = {
 };
 const own = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
 
-router.patch('/:dosyaId', onlyAdmin, dosyaErisim, async (req, res, next) => {
+// Servis yalnız kendi dosyasında (dosyaErisim); atanan_servis bu uçtan değişmez
+router.patch('/:dosyaId', adminOrServis, dosyaErisim, async (req, res, next) => {
   try {
     const { dosyaId } = req.params;
     const { alan, deger } = req.body || {};
