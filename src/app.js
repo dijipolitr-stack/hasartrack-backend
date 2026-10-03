@@ -19,6 +19,7 @@ const stokRoutes    = require('./routes/stok');
 const raporRoutes   = require('./routes/raporlar');
 const takipRoutes   = require('./routes/takip');
 const tutanakRoutes = require('./routes/tutanak');
+const modulRoutes   = require('./routes/moduller');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   // Serverless'ta process.exit işe yaramaz; throw hem yerelde (çıkış kodu 1) hem Vercel'de net hata verir
@@ -72,6 +73,7 @@ app.use('/api/stok',     stokRoutes);
 app.use('/api/raporlar',   raporRoutes);
 app.use('/api/takip',      takipRoutes);
 app.use('/api/tutanaklar', tutanakRoutes);
+app.use('/api/moduller',  modulRoutes);
 
 // ── SAĞLIK KONTROLÜ ─────────────────────────────────────────
 app.get('/health', (req, res) => {
