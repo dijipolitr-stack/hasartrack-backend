@@ -23,6 +23,7 @@ const modulRoutes   = require('./routes/moduller');
 const dviRoutes     = require('./routes/dvi');
 const protokolRoutes = require('./routes/protokoller');
 const ikameRoutes   = require('./routes/ikame');
+const lastikRoutes  = require('./routes/lastikTalepleri');
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   // Serverless'ta process.exit işe yaramaz; throw hem yerelde (çıkış kodu 1) hem Vercel'de net hata verir
@@ -80,6 +81,7 @@ app.use('/api/moduller',  modulRoutes);
 app.use('/api/dvi',       dviRoutes);
 app.use('/api/protokoller', protokolRoutes);
 app.use('/api/ikame',     ikameRoutes);
+app.use('/api/lastik-talepleri', lastikRoutes);
 
 // ── SAĞLIK KONTROLÜ ─────────────────────────────────────────
 app.get('/health', (req, res) => {
